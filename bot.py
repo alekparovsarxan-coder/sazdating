@@ -222,6 +222,61 @@ async def notify_admins(bot: Bot, text: str, photo: str | None = None, kb=None) 
     for aid in ADMIN_IDS:
         try:
             if photo:
+                await bot.send_photo(aid, photo, caption=text[:1000], reply_markup=kb)
+            else:
+                await bot.send_message(aid, text, reply_markup=kb)
+        except Exception:
+            logging.exception("admin notify failed")
+
+
+def review_kb(uid: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Qəbul et", callback_data=f"adm:ok:{uid}"),
+        InlineKeyboardButton(text="Yox", callback_data=f"adm:no:{uid}"),
+        InlineKeyboardButton(text="Ban", callback_data=f"adm:ban:{uid}"),
+    ]])
+
+
+def review_text(row) -> str:
+    uname = f"@{row['username']}" if row["username"] else "username yoxdur"
+    lat = row["lat"] or 0
+    lon = row["lon"] or 0
+    return (
+        "<b>Gözləmə rejimi — yeni anket</b>\n"
+        f"ID: <code>{row['user_id']}</code>\n"
+        f"{row['name']}, {row['age']} · {row['gender']} → {row['looking']}\n"
+        f"{row['city']} · {uname}\n"
+        f"Konum: {lat:.5f}, {lon:.5f}\n"
+        f"https://maps.google.com/?q={lat},{lon}\n\n"
+        f"{row['bio'] or '—'}\n\n"
+        "Aşağıdan qəbul et, yox de, ya da ban elə."
+    )
+
+
+async def send_review(bot: Bot, row) -> None:
+    if row["user_id"] == OWNER_ID:
+        return
+    text = review_text(row)
+    kb = review_kb(row["user_id"])
+    try:
+        if row["photo_id"]:
+            await bot.send_photo(OWNER_ID, row["photo_id"], caption=text[:1000], reply_markup=kb)
+        else:
+            await bot.send_message(OWNER_ID, text, reply_markup=kb)
+    except Exception:
+        logging.exception("review photo failed")
+        try:
+            await bot.send_message(OWNER_ID, text, reply_markup=kb)
+        except Exception:
+            logging.exception("review text failed")
+    if row["lat"] and row["lon"]:
+        try:
+            await bot.send_location(OWNER_ID, row["lat"], row["lon"])
+        except Exception:
+            logging.exception("review location failed")
+    for aid in ADMIN_IDS:
+        try:
+            if photo:
                 await bot.send_photo(aid, photo, caption=text, reply_markup=kb)
             else:
                 await bot.send_message(aid, text, reply_markup=kb)
@@ -289,6 +344,13 @@ def main_kb(uid: int, lang: str = "az") -> ReplyKeyboardMarkup:
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext) -> None:
     await state.clear()
+    if is_admin(message.from_user.id):
+        await db.set_status(message.from_user.id, "approved") if await db.get(message.from_user.id) else None
+        await message.answer(
+            "Admin, salam. Sən növbədə deyilsən. Düymələr aşağıdadır, yoxla.",
+            reply_markup=main_kb(message.from_user.id, "az"),
+        )
+        return
     if await db.is_blacklisted(message.from_user.id):
         await message.answer("Bu hesab qara siyahıdadır. Yenidən qeydiyyat bağlıdır.")
         return
@@ -297,6 +359,8 @@ async def start(message: Message, state: FSMContext) -> None:
         arg = message.text.split(maxsplit=1)[1]
     if arg == "yenile":
         user = None
+    else:
+        user = await db.get(message.from_user.id)
     if user and user["photo_id"] and user["status"] != "rejected" and arg != "yenile":
         lang = user["lang"] or "az"
         await vibe(message, "hi")
@@ -438,27 +502,8 @@ async def reg_photo(message: Message, state: FSMContext, bot: Bot) -> None:
     total, _, _, _ = await db.counts()
     min_users = await db.setting("min_users", "100")
     await message.answer(PENDING.format(min=min_users, total=total), reply_markup=main_kb(message.from_user.id))
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Təsdiqlə", callback_data=f"adm:ok:{message.from_user.id}"),
-        InlineKeyboardButton(text="Rədd", callback_data=f"adm:no:{message.from_user.id}"),
-    ], [
-        InlineKeyboardButton(text="Ban", callback_data=f"adm:ban:{message.from_user.id}"),
-    ]])
-    uname = f"@{message.from_user.username}" if message.from_user.username else "username yoxdur"
-    text = (
-        "<b>Yeni anket</b>\n"
-        f"ID: <code>{message.from_user.id}</code>\n"
-        f"{payload['name']}, {payload['age']} · {payload['gender']} → {payload['looking']}\n"
-        f"{payload['city']} · {uname}\n"
-        f"Konum: {payload['lat']:.4f}, {payload['lon']:.4f}\n\n"
-        f"{payload['bio'] or '—'}\n\n"
-        f"Ümumi qeydiyyat: {total}/{min_users}"
-    )
-    await notify_admins(bot, text, payload["photo_id"], kb)
-    try:
-        await bot.send_message(OWNER_ID, "Yeni müştəri qoşuldu. Yuxarıdakı anketə bax və təsdiqlə.")
-    except Exception:
-        logging.exception("owner ping failed")
+    row = await db.get(message.from_user.id)
+    await send_review(bot, row)
 
 
 @router.message(Reg.photo)
@@ -1161,12 +1206,19 @@ async def main() -> None:
         raise SystemExit("BOT_TOKEN yoxdur.")
     logging.basicConfig(level=logging.INFO)
     await db.init()
+    await db.set_status(OWNER_ID, "approved")
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
     dp.include_router(router)
     asyncio.create_task(jobs(bot))
     try:
-        await bot.send_message(OWNER_ID, "Bot işləyir. Panel üçün /admin və ya 🛠 Admin panel.")
+        await bot.send_message(OWNER_ID, "Bot işləyir. Gözləyənləri indi göndərirəm. Sən növbədə deyilsən.")
+        pending = await db.pending(200)
+        pending = [r for r in pending if r["user_id"] != OWNER_ID]
+        await bot.send_message(OWNER_ID, f"Köhnə gözləyənlər: {len(pending)}")
+        for row in pending:
+            await send_review(bot, row)
+            await asyncio.sleep(0.3)
     except Exception:
         logging.exception("startup ping failed")
     await dp.start_polling(bot)
