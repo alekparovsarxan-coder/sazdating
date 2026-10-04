@@ -117,7 +117,12 @@ class DB:
             await db.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES ('min_users', '100')"
             )
-            for col, kind in (("lang", "TEXT"), ("city_only", "INTEGER"), ("hidden_until", "TEXT"), ("admin_note", "TEXT"), ("phone", "TEXT")):
+            for col, kind in (
+                ("lang", "TEXT"), ("city_only", "INTEGER"), ("hidden_until", "TEXT"),
+                ("admin_note", "TEXT"), ("phone", "TEXT"), ("boost_day", "TEXT"),
+                ("last_seen", "TEXT"), ("photo_uid", "TEXT"), ("views_today", "INTEGER"),
+                ("views_day", "TEXT"), ("bday", "TEXT"), ("campaign", "TEXT"),
+            ):
                 try:
                     await db.execute(f"ALTER TABLE users ADD COLUMN {col} {kind}")
                 except Exception:
@@ -171,6 +176,7 @@ class DB:
             "name", "age", "city", "bio", "looking", "username", "photo_id",
             "lat", "lon", "hidden", "status", "approved_at", "last_nudge",
             "like_warn", "prem_warn", "lang", "city_only", "hidden_until", "admin_note", "phone",
+            "boost_day", "last_seen", "photo_uid", "views_today", "views_day", "bday", "campaign",
         }
         if field not in allowed:
             raise ValueError(field)
@@ -305,6 +311,7 @@ class DB:
             rows = await cur.fetchall()
         now_iso = now()
         rows = [r for r in rows if not r["hidden_until"] or r["hidden_until"] < now_iso]
+        rows = [r for r in rows if not r["last_seen"] or r["last_seen"] > (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()]
         if not rows:
             return None
         featured = await self.setting("featured", "")
@@ -325,8 +332,11 @@ class DB:
             else:
                 band = 3
             same = 0 if r["city"] == me["city"] else 1
+            lang = 0 if (r["lang"] or "az") == (me["lang"] or "az") else 1
+            stale = 1 if r["last_seen"] and r["last_seen"] < (datetime.now(timezone.utc) - timedelta(days=14)).isoformat() else 0
+            boost = 0 if r["boost_day"] == today() else 1
             prem = 0 if self.is_premium(r) else 1
-            return (band, same, prem, dist)
+            return (boost, band, lang, same, stale, prem, dist)
 
         rows = sorted(rows, key=score)
         return rows[0]
@@ -357,6 +367,10 @@ class DB:
                     )
                     match = True
             await db.execute("UPDATE users SET views=views+1 WHERE user_id=?", (to_id,))
+            await db.execute(
+                "UPDATE users SET views_today=COALESCE(views_today,0)+1, views_day=? WHERE user_id=?",
+                (today(), to_id),
+            )
             await db.commit()
             return match
 
@@ -420,6 +434,8 @@ class DB:
                 "INSERT OR IGNORE INTO blocks (user_id, blocked_id) VALUES (?,?)",
                 (user_id, blocked_id),
             )
+            a, b = sorted((user_id, blocked_id))
+            await db.execute("DELETE FROM matches WHERE user_a=? AND user_b=?", (a, b))
             await db.commit()
 
     async def report(self, from_id: int, to_id: int, reason: str) -> int:
@@ -451,7 +467,7 @@ class DB:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
-                "SELECT * FROM users WHERE status='pending' ORDER BY created_at LIMIT ?",
+                "SELECT * FROM users WHERE status='pending' ORDER BY created_at ASC LIMIT ?",
                 (limit,),
             )
             return await cur.fetchall()
@@ -518,7 +534,19 @@ class DB:
                 "INSERT OR REPLACE INTO blacklist (user_id, reason, created_at) VALUES (?,?,?)",
                 (user_id, reason, now()),
             )
+            await db.execute("UPDATE users SET admin_note=? WHERE user_id=?", (reason, user_id))
             await db.commit()
+
+    async def same_photo(self, photo_uid: str, user_id: int):
+        if not photo_uid:
+            return None
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT user_id, status, name FROM users WHERE photo_uid=? AND user_id!=?",
+                (photo_uid, user_id),
+            )
+            return await cur.fetchone()
 
     async def is_blacklisted(self, user_id: int) -> bool:
         async with aiosqlite.connect(self.path) as db:

@@ -387,6 +387,8 @@ async def start(message: Message, state: FSMContext) -> None:
             await message.answer("Bu hesab qara siyahıdadır. Yenidən qeydiyyat bağlıdır.")
             return
         arg = message.text.split(maxsplit=1)[1] if message.text and " " in message.text else ""
+        if arg.startswith("ru"):
+            await db.set_setting("camp_ru", str(int(await db.setting("camp_ru", "0") or 0) + 1))
         user = None if arg == "yenile" else await db.get(message.from_user.id)
         if is_admin(message.from_user.id) and user:
             await db.set_status(message.from_user.id, "approved")
@@ -394,7 +396,10 @@ async def start(message: Message, state: FSMContext) -> None:
             lang = user["lang"] or "az"
             status = {"approved": t(lang, "st_ok"), "pending": t(lang, "st_wait"), "banned": t(lang, "st_ban")}.get(user["status"], t(lang, "st_ok"))
             extra = "\nAdmin panel aşağıdadır. Lent də sənin üçündür." if is_admin(message.from_user.id) else ""
-            await message.answer(t(lang, "back").format(name=user["name"], status=status) + extra, reply_markup=main_kb(message.from_user.id, lang))
+            await message.answer(
+                t(lang, "back").format(name=user["name"], status=status) + extra + f"\nSəni bəyənən: {user['likes_recv'] or 0}. Keçənlər göstərilmir.",
+                reply_markup=main_kb(message.from_user.id, lang),
+            )
             return
         if is_admin(message.from_user.id):
             await message.answer("Admin panel açıqdır. Öz anketin üçün dili seç.", reply_markup=main_kb(message.from_user.id, "az"))
@@ -558,10 +563,18 @@ async def reg_photo(message: Message, state: FSMContext, bot: Bot) -> None:
         "lon": data["lon"],
         "referrer": data.get("referrer"),
     }
+    if photo.file_unique_id:
+        dup = await db.same_photo(photo.file_unique_id, message.from_user.id)
+        if dup:
+            await notify_admins(bot, f"Eyni şəkil. Yeni {message.from_user.id}, əvvəlki {dup['user_id']} status {dup['status']}.")
+            if dup["status"] == "rejected":
+                await notify_admins(bot, "Bu şəkil əvvəl rədd olunub.")
     await db.save_profile(payload)
     await db.set_field(message.from_user.id, "lang", data.get("lang") or "az")
     if data.get("phone"):
         await db.set_field(message.from_user.id, "phone", data["phone"])
+    if photo.file_unique_id:
+        await db.set_field(message.from_user.id, "photo_uid", photo.file_unique_id)
     if payload["referrer"]:
         ref = await db.get(payload["referrer"])
         if ref:
@@ -629,13 +642,26 @@ async def my_profile(message: Message) -> None:
         [InlineKeyboardButton(text="1 gün gizlət", callback_data="e:day")],
         [InlineKeyboardButton(text="Yalnız şəhərim", callback_data="e:cityonly")],
         [InlineKeyboardButton(text="Dil", callback_data="e:lang")],
-        [InlineKeyboardButton(text="Dəvət linki", callback_data="e:ref")],
+        [InlineKeyboardButton(text="Boost", callback_data="e:boost")],
     ])
     await message.answer_photo(
         row["photo_id"],
-        caption=card_text(row, row) + f"\n\nStatus: {prem}\nBəyənmə qalığı: {left_s}\nSuper kredit: {row['super_credits']}\nBaxış: {row['views']}",
+        caption=card_text(row, row) + f"\n\nStatus: {prem}\nBəyənmə qalığı: {left_s}\nSəni bəyənən: {row['likes_recv'] or 0}",
         reply_markup=kb,
     )
+
+
+@router.callback_query(F.data == "e:boost")
+async def boost(cb: CallbackQuery) -> None:
+    row = await db.get(cb.from_user.id)
+    if not db.is_premium(row):
+        await cb.answer("Boost Premium üçündür, gündə 1.", show_alert=True)
+        return
+    if row["boost_day"] == today():
+        await cb.answer("Bu günkü boost bitib.", show_alert=True)
+        return
+    await db.set_field(cb.from_user.id, "boost_day", today())
+    await cb.answer("Bu gün lentin əvvəlindəsən.", show_alert=True)
 
 
 @router.callback_query(F.data == "e:ref")
@@ -682,7 +708,7 @@ async def set_lang(cb: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("e:"))
 async def edit_start(cb: CallbackQuery, state: FSMContext) -> None:
     field = cb.data.split(":")[1]
-    if field in ("hide", "ref", "day", "cityonly", "lang"):
+    if field in ("hide", "ref", "day", "cityonly", "lang", "boost"):
         return
     await state.set_state(Edit.value)
     await state.update_data(field=field)
@@ -695,6 +721,8 @@ async def edit_photo(message: Message, state: FSMContext) -> None:
     if (await state.get_data()).get("field") != "photo":
         return
     await db.set_field(message.from_user.id, "photo_id", message.photo[-1].file_id)
+    if message.photo[-1].file_unique_id:
+        await db.set_field(message.from_user.id, "photo_uid", message.photo[-1].file_unique_id)
     await db.set_status(message.from_user.id, "pending")
     await state.clear()
     await message.answer("Şəkil yeniləndi və yenidən yoxlamaya düşdü.", reply_markup=main_kb(message.from_user.id))
@@ -776,7 +804,7 @@ async def swipe(cb: CallbackQuery, bot: Bot) -> None:
             [InlineKeyboardButton(text="Sakit və xoş gəldi", callback_data=f"ice:0:{to_id}")],
             [InlineKeyboardButton(text="Çay vaxtın varsa yaz", callback_data=f"ice:1:{to_id}")],
             [InlineKeyboardButton(text="Yaxınıq, bir salam", callback_data=f"ice:2:{to_id}")],
-            [InlineKeyboardButton(text="Yaz", url=f"https://t.me/{other['username']}" if other["username"] else f"tg://user?id={to_id}")],
+            [InlineKeyboardButton(text="Hələ burdasan?", callback_data=f"ping:{row['user_id']}")],
         ])
         await cb.message.answer(body + "\n\nAd indi açıqdır. İsti cümləni seç, mən ötürərəm.", reply_markup=ice)
         try:
@@ -800,7 +828,16 @@ ICE = [
 ]
 
 
-@router.callback_query(F.data.startswith("ice:"))
+@router.callback_query(F.data.startswith("ping:"))
+async def ping_match(cb: CallbackQuery, bot: Bot) -> None:
+    uid = int(cb.data.split(":")[1])
+    me = await db.get(cb.from_user.id)
+    try:
+        await bot.send_message(uid, f"{me['name']} soruşur: hələ burdasan?")
+    except Exception:
+        await cb.answer("Çatmadı.", show_alert=True)
+        return
+    await cb.answer("Göndərdim.")
 async def ice(cb: CallbackQuery, bot: Bot) -> None:
     _, idx, uid = cb.data.split(":")
     text = ICE[int(idx)]
@@ -836,7 +873,11 @@ async def report_do(cb: CallbackQuery, bot: Bot) -> None:
     reason = REASONS[int(idx)]
     n = await db.report(cb.from_user.id, int(uid), reason)
     await db.block(cb.from_user.id, int(uid))
-    await cb.answer("Şikayət düşdü.", show_alert=True)
+    await cb.answer("Şikayət düşdü. Baxırıq.", show_alert=True)
+    try:
+        await bot.send_message(cb.from_user.id, "Şikayətin alındı. Baxırıq.")
+    except Exception:
+        pass
     await notify_admins(
         bot,
         f"Şikayət\nHədəf: <code>{uid}</code>\nSəbəb: {reason}\nÜmumi şikayət: {n}\n"
@@ -1274,7 +1315,14 @@ async def jobs(bot: Bot) -> None:
     while True:
         try:
             hour = datetime.now(timezone.utc).hour
-            if hour == 5 and await db.setting("morning", "") != today():
+            if hour == 19 and await db.setting("night_report", "") != today():
+                await db.set_setting("night_report", today())
+                total, pending, approved, banned = await db.counts()
+                new, appr, reports, pay_n, stars = await db.day_stats()
+                ru = await db.setting("camp_ru", "0")
+                await notify_admins(bot, f"23:00 hesabat\nGələn {new} · bitirən/təsdiq {appr} · ödəniş {pay_n}/{stars}\nGözləyən {pending} · RU link {ru}")
+                if pending >= 20:
+                    await notify_admins(bot, "Qırmızı: gözləyən 20-ni keçdi.")
                 await db.set_setting("morning", today())
                 total, pending, approved, banned = await db.counts()
                 await notify_admins(bot, f"Sabah xülasəsi. Hazırdır.\nÜmumi {total} · gözləyən {pending} · açıq {approved} · ban {banned}")
