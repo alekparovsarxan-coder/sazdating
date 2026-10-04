@@ -1,49 +1,53 @@
 WELCOME = (
-    "<b>SazDating</b>\n"
-    "Yaxınlıqdakı insanlarla tanışlıq.\n\n"
-    "Real şəkil, konum və 18+ məcburidir.\n"
-    "Hesab admin təsdiqindən sonra açılır."
+    "Salam, gəldin. 💛\n\n"
+    "<b>SazDating</b> — şəhərində, yaxınlığında adam tapmaq üçün.\n"
+    "Tələsmə. Bir neçə sualdır, sonra anketin mənə düşəcək.\n\n"
+    "Real şəkil və 18+ kifayətdir. Qalanını birlikdə yığarıq."
 )
-ASK_GENDER = "Cinsini seç."
-ASK_LOOKING = "Kimlə tanış olmaq istəyirsən?"
-ASK_NAME = "Adın? 2–24 hərf."
-ASK_AGE = "Yaşın? Yalnız rəqəm. 18-dən aşağı qəbul edilmir."
-ASK_CITY = "Şəhərin?"
+ASK_GENDER = "Əvvəlcə səni necə yazım? 👇"
+ASK_LOOKING = "Kimlə tanış olmaq istəyirsən? Düzünü de, belə daha rahatdır."
+ASK_NAME = "Adın nədir? Dostların səni necə çağırır?"
+ASK_AGE = "Neçə yaşın var? 18-dən aşağı burda yer yoxdur, qayda belədir."
+ASK_CITY = "Hansı şəhərdəsən? Yaxın anketlər buna görə gələcək."
 ASK_LOC = (
-    "Konumunu göndər.\n"
-    "Leo-dakı kimi yaxın anketlər buna görə seçilir.\n"
-    "Aşağıdakı düymədən göndər."
+    "İndi konumunu göndər. 📍\n"
+    "Heç kimə ünvan yazmıram — sadəcə yaxınlıqdakıları seçmək üçün.\n"
+    "Aşağıdakı düyməyə bas."
 )
-ASK_BIO = "Özün haqqında qısa yaz (maks. 300). Keçmək üçün /skip"
-ASK_PHOTO = "Üzün aydın göründüyü real şəklini göndər. Mem və başqasının fotosu olmaz."
+ASK_BIO = (
+    "Özün haqqında bir-iki cümlə yaz.\n"
+    "Məsələn: kofe, gecə gəzintisi, sakit adamam.\n"
+    "Keçmək istəsən /skip"
+)
+ASK_PHOTO = (
+    "Son addım: üzün göründüyü öz şəklini at. 📸\n"
+    "Mem və başqasının fotosu olmaz — təsdiqdən keçməz."
+)
 PENDING = (
-    "Anketin admin yoxlamasındadır.\n"
-    "18+ və real şəkil təsdiqlənəndən sonra yazacağıq.\n"
-    "İlk mərhələdə hesablar ən azı {min} nəfər yığılana qədər gözləyə bilər.\n"
-    "İndi növbə: {total}/{min}"
+    "Anketin mənə düşdü. ✨\n"
+    "Bir baxım, 18+ və şəkil sənin olsun, sonra açaram.\n"
+    "İlk dəfə {min} nəfər yığılana qədər gözlədə bilərəm.\n"
+    "İndi: {total}/{min}"
 )
-APPROVED = "Hesabın təsdiqləndi. Adının yanında mavi tik var. Lentə baxa bilərsən."
-REJECTED = "Hesabın təsdiqlənmədi. 18+ və öz şəklin olmalıdır. Yenidən /start."
-BANNED = "Hesab dayandırılıb. Səbəb şikayətlər və ya qaydaların pozulmasıdır."
-UNBANNED = "Hesabın yenidən açıldı."
-NO_PROFILES = "Yaxınlıqda yeni anket qalmayıb. Bir az sonra yenidən bax."
-NOT_APPROVED = "Hələ yoxlama mərhələsindəsən. Təsdiqdən sonra lent açılacaq."
-LIMIT = "Bu günkü 30 pulsuz bəyənmə bitdi. Aşağıdakı Ödənişdən +30 bəyənmə (100 Stars) ala bilərsən."
-SUPER_NEED = "Superlike üçün 25 Stars lazımdır. Ödəniş düyməsindən al."
-SUPER_LIMIT = "Bu günkü 20 premium superlike bitdi."
-MATCH = "<b>Matç.</b>\n{name}{tick}, {age}\n{city} · {dist}\n\n{bio}"
+APPROVED = "Oldu. 🎉 Hesabın təsdiqləndi, adında mavi tik var. Lentə gir, yaxınlığa bax."
+REJECTED = "Bu dəfə təsdiqləmədim. Öz şəklin və 18+ lazımdır. Yenidən başlamaq üçün /start yenile"
+BANNED = "Hesab dayandırılıb. Şikayət və ya qayda pozuntusu olub."
+UNBANNED = "Hesabını yenidən açdım. Girişin var."
+NO_PROFILES = "Yaxınlıqda hələ yeni anket qalmayıb. Bir azdan yenə bax, yığılırıq. 💛"
+NOT_APPROVED = "Hələ yoxlamadasan. Təsdiqdən sonra lent açılacaq."
+LIMIT = "Bu günkü 30 bəyənmə bitdi. İstəsən +30-u 100 Stars-a aça bilərsən."
+SUPER_NEED = "Superlike ayrıca gedir. Biri 25 Stars. Ödənişdən götür."
+SUPER_LIMIT = "Bu günkü 20 premium superlike bitdi. Sabah yenə var."
+MATCH = "Matç oldu. 💛\n<b>{name}</b>{tick}, {age}\n{city} · {dist}\n\n{bio}"
 SUPER_IN = (
-    "<b>Sənə superlike gəldi.</b>\n"
+    "Sənə superlike gəldi. ⭐\n"
     "Bu, adi bəyənmə deyil — səni xüsusi seçiblər.\n\n"
-    "{name}{tick}, {age}\n{city} · {dist}\n\n{bio}"
+    "<b>{name}</b>{tick}, {age}\n{city} · {dist}\n\n{bio}"
 )
 PREMIUM_INFO = (
     "<b>Premium · 7 gün · 1000 Stars</b>\n"
-    "· Bəyənmə limitsiz\n"
-    "· Gündə 20 superlike\n"
-    "· Sarı tik\n"
-    "· Səni bəyənənlər\n"
-    "· Yaxınlıqdakılar əvvəl səni görür"
+    "Bəyənmə limitsiz, gündə 20 superlike, sarı tik.\n"
+    "Səni bəyənənləri görürsən və yaxınlıqdakılar əvvəl səni görür."
 )
 PAY_INFO = (
     "<b>Ödəniş</b>\n"
@@ -55,9 +59,9 @@ PAY_INFO = (
     "Superlike krediti: {super}"
 )
 NUDGES = [
-    "Yaxınlığında yeni anketlər var. Lentə bax.",
-    "Bu axşam bir bəyənmə matça çevrilə bilər. 2 dəqiqəlik bax.",
-    "SazDating açıqdır. Konumuna yaxın insanlar gözləyir.",
-    "Profilin aktiv qalsın. Bu gün lentə bir dəfə bax.",
+    "Yaxınlığında yeni anket var. Bir dəqiqəlik bax, bəlkə tutar. 💛",
+    "Bu axşam lent sakit deyil. Gir, iki karta bax.",
+    "SazDating burdadır. Konumuna yaxın adamlar yığılıb.",
+    "Profilin durur, amma lent gedir. Bu gün bir dəfə bax.",
     "Superlike adi bəyənmədən seçilir. Birini yoxla.",
 ]

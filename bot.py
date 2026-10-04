@@ -53,7 +53,10 @@ from texts import (
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
+OWNER_ID = 8753136288
+ADMIN_IDS = {OWNER_ID}
+extra = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
+ADMIN_IDS |= extra
 DB_PATH = os.getenv("DB_PATH", "sazdating.db")
 FREE_LIKES = 30
 PRICE_LIKES = 100
@@ -92,13 +95,13 @@ def is_admin(uid: int) -> bool:
 
 def main_kb(uid: int) -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="Lent"), KeyboardButton(text="Profilim")],
-        [KeyboardButton(text="Matçlar"), KeyboardButton(text="Məni bəyənənlər")],
-        [KeyboardButton(text="Superlike"), KeyboardButton(text="Ödəniş")],
-        [KeyboardButton(text="Premium"), KeyboardButton(text="Konum yenilə")],
+        [KeyboardButton(text="🔥 Lent"), KeyboardButton(text="💛 Profilim")],
+        [KeyboardButton(text="💬 Matçlar"), KeyboardButton(text="👀 Məni bəyənənlər")],
+        [KeyboardButton(text="⭐ Superlike"), KeyboardButton(text="💎 Ödəniş")],
+        [KeyboardButton(text="👑 Premium"), KeyboardButton(text="📍 Konum yenilə")],
     ]
     if is_admin(uid):
-        rows.append([KeyboardButton(text="Admin")])
+        rows.append([KeyboardButton(text="🛠 Admin panel")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -220,27 +223,42 @@ async def notify_admins(bot: Bot, text: str, photo: str | None = None, kb=None) 
             logging.exception("admin notify failed")
 
 
+async def vibe(message: Message, key: str) -> None:
+    stickers = {
+        "hi": "CAACAgIAAxkBAAEP0aVn1nC0r3o3nQABQ0oZ0m0Z0m0Z0m0AAvoAAygPOxY6k0Z0m0Z0m0Z0BA",
+        "love": "CAACAgIAAxkBAAEP0aln1nC0r3o3nQABQ0oZ0m0Z0m0Z0m0AAvoAAygPOxY6k0Z0m0Z0m0Z0BA",
+    }
+    try:
+        await message.answer_sticker(stickers.get(key, stickers["hi"]))
+    except Exception:
+        pass
+
+
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext) -> None:
     await state.clear()
     user = await db.get(message.from_user.id)
-    if user and user["status"] == "banned":
-        await message.answer(BANNED)
-        return
-    if user and user["status"] == "approved" and user["photo_id"]:
-        await message.answer("Yenidən xoş gəldin.", reply_markup=main_kb(message.from_user.id))
-        return
-    if user and user["status"] == "pending":
-        total, _, _, _ = await db.counts()
-        min_users = await db.setting("min_users", "100")
-        await message.answer(PENDING.format(min=min_users, total=total))
+    if user and user["photo_id"] and user["status"] != "rejected":
+        await vibe(message, "hi")
+        status = {
+            "approved": "Hesabın açıqdır, lent səni gözləyir.",
+            "pending": "Hələ yoxlamadasan. Təsdiq olanda yazacam.",
+            "banned": BANNED,
+        }.get(user["status"], "Yenidən salam.")
+        await message.answer(
+            f"Yenidən salam, {user['name']}. 💛\n{status}\nEyni sualları bir daha vermirəm.",
+            reply_markup=main_kb(message.from_user.id),
+        )
         return
     ref = None
     if message.text and " " in message.text:
         arg = message.text.split(maxsplit=1)[1]
         if arg.startswith("ref") and arg[3:].isdigit():
             ref = int(arg[3:])
+        if arg == "yenile":
+            ref = None
     await state.update_data(referrer=ref)
+    await vibe(message, "hi")
     await message.answer(WELCOME, reply_markup=ReplyKeyboardRemove())
     await message.answer(ASK_GENDER, reply_markup=gender_kb())
     await state.set_state(Reg.gender)
@@ -373,6 +391,10 @@ async def reg_photo(message: Message, state: FSMContext, bot: Bot) -> None:
         f"Ümumi qeydiyyat: {total}/{min_users}"
     )
     await notify_admins(bot, text, payload["photo_id"], kb)
+    try:
+        await bot.send_message(OWNER_ID, "Yeni müştəri qoşuldu. Yuxarıdakı anketə bax və təsdiqlə.")
+    except Exception:
+        logging.exception("owner ping failed")
 
 
 @router.message(Reg.photo)
@@ -380,13 +402,13 @@ async def reg_photo_bad(message: Message) -> None:
     await message.answer("Şəkil göndər.")
 
 
-@router.message(F.text == "Lent")
+@router.message(F.text.in_({"🔥 Lent", "Lent"}))
 async def feed(message: Message) -> None:
     if await gate(message):
         await show_next(message, message.from_user.id)
 
 
-@router.message(F.text == "Profilim")
+@router.message(F.text.in_({"💛 Profilim", "Profilim"}))
 async def my_profile(message: Message) -> None:
     row = await db.get(message.from_user.id)
     if not row or not row["photo_id"]:
@@ -455,7 +477,7 @@ async def edit_bio(message: Message, state: FSMContext) -> None:
     await message.answer("Bio yeniləndi.", reply_markup=main_kb(message.from_user.id))
 
 
-@router.message(F.text == "Konum yenilə")
+@router.message(F.text.in_({"📍 Konum yenilə", "Konum yenilə"}))
 async def ask_loc(message: Message, state: FSMContext) -> None:
     await state.set_state(Reg.loc)
     await state.update_data(only_loc=True)
@@ -565,7 +587,7 @@ async def report_do(cb: CallbackQuery, bot: Bot) -> None:
     await show_next(cb.message, cb.from_user.id)
 
 
-@router.message(F.text == "Matçlar")
+@router.message(F.text.in_({"💬 Matçlar", "Matçlar"}))
 async def matches(message: Message) -> None:
     if not await gate(message):
         return
@@ -578,7 +600,7 @@ async def matches(message: Message) -> None:
         await message.answer_photo(row["photo_id"], caption=card_text(row, me), reply_markup=write_kb(row["user_id"], row["username"]))
 
 
-@router.message(F.text == "Məni bəyənənlər")
+@router.message(F.text.in_({"👀 Məni bəyənənlər", "Məni bəyənənlər"}))
 async def who_liked(message: Message) -> None:
     if not await gate(message):
         return
@@ -597,7 +619,7 @@ async def who_liked(message: Message) -> None:
         await message.answer_photo(row["photo_id"], caption=cap, reply_markup=card_kb(row["user_id"]))
 
 
-@router.message(F.text.in_({"Ödəniş", "Premium", "Superlike"}))
+@router.message(F.text.in_({"💎 Ödəniş", "Ödəniş", "👑 Premium", "Premium", "⭐ Superlike", "Superlike"}))
 async def pay_menu(message: Message) -> None:
     row = await db.get(message.from_user.id)
     if not row:
@@ -649,10 +671,12 @@ async def paid(message: Message) -> None:
         await message.answer(f"Premium aktivdir, {until}-dək. Adında sarı tik görünəcək.")
 
 
-@router.message(F.text == "Admin")
+@router.message(F.text.in_({"🛠 Admin panel", "Admin", "admin"}))
 @router.message(Command("admin"))
+@router.message(Command("panel"))
 async def admin(message: Message) -> None:
     if not is_admin(message.from_user.id):
+        await message.answer("Bu panel yalnız admin üçündür.")
         return
     total, pending, approved, banned = await db.counts()
     wait = await db.setting("wait_mode", "1")
@@ -930,6 +954,10 @@ async def main() -> None:
     dp = Dispatcher()
     dp.include_router(router)
     asyncio.create_task(jobs(bot))
+    try:
+        await bot.send_message(OWNER_ID, "Bot işləyir. Panel üçün /admin və ya 🛠 Admin panel.")
+    except Exception:
+        logging.exception("startup ping failed")
     await dp.start_polling(bot)
 
 
