@@ -117,7 +117,7 @@ class DB:
             await db.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES ('min_users', '100')"
             )
-            for col, kind in (("lang", "TEXT"), ("city_only", "INTEGER"), ("hidden_until", "TEXT"), ("admin_note", "TEXT")):
+            for col, kind in (("lang", "TEXT"), ("city_only", "INTEGER"), ("hidden_until", "TEXT"), ("admin_note", "TEXT"), ("phone", "TEXT")):
                 try:
                     await db.execute(f"ALTER TABLE users ADD COLUMN {col} {kind}")
                 except Exception:
@@ -170,7 +170,7 @@ class DB:
         allowed = {
             "name", "age", "city", "bio", "looking", "username", "photo_id",
             "lat", "lon", "hidden", "status", "approved_at", "last_nudge",
-            "like_warn", "prem_warn", "lang", "city_only", "hidden_until", "admin_note",
+            "like_warn", "prem_warn", "lang", "city_only", "hidden_until", "admin_note", "phone",
         }
         if field not in allowed:
             raise ValueError(field)
@@ -313,11 +313,20 @@ class DB:
                 return r
 
         def score(r):
-            dist = 9999.0
+            dist = 99999.0
             if me["lat"] and r["lat"]:
                 dist = haversine(me["lat"], me["lon"], r["lat"], r["lon"])
+            if dist <= 15:
+                band = 0
+            elif dist <= 40:
+                band = 1
+            elif dist <= 100:
+                band = 2
+            else:
+                band = 3
+            same = 0 if r["city"] == me["city"] else 1
             prem = 0 if self.is_premium(r) else 1
-            return (prem, dist)
+            return (band, same, prem, dist)
 
         rows = sorted(rows, key=score)
         return rows[0]

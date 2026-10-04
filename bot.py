@@ -81,6 +81,7 @@ class Reg(StatesGroup):
     looking = State()
     name = State()
     age = State()
+    phone = State()
     city = State()
     loc = State()
     bio = State()
@@ -247,6 +248,7 @@ def review_text(row) -> str:
         f"{row['name']}, {row['age']} · {row['gender']} → {row['looking']}\n"
         f"{row['city']} · {uname}\n"
         f"Konum: {lat:.5f}, {lon:.5f}\n"
+        f"Nömrə: {row['phone'] or '—'}\n"
         f"https://maps.google.com/?q={lat},{lon}\n\n"
         f"{row['bio'] or '—'}\n\n"
         "Aşağıdan qəbul et, yox de, ya da ban elə."
@@ -328,7 +330,31 @@ def loc_kb(lang: str) -> ReplyKeyboardMarkup:
     )
 
 
-def main_kb(uid: int, lang: str = "az") -> ReplyKeyboardMarkup:
+def parse_age(text: str):
+    raw = (text or "").strip().lower().replace(",", ".")
+    if raw.isdigit():
+        n = int(raw)
+        if 1940 <= n <= 2008:
+            n = 2026 - n
+        return n if 18 <= n <= 70 else None
+    parts = re.findall(r"\d+", raw)
+    if len(parts) == 3 and len(parts[2]) == 4:
+        year = int(parts[2])
+        n = 2026 - year
+        return n if 18 <= n <= 70 else None
+    if parts:
+        n = int(parts[0])
+        if 1940 <= n <= 2008:
+            n = 2026 - n
+        return n if 18 <= n <= 70 else None
+    return None
+
+
+def phone_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📱 Nömrəmi göndər", request_contact=True)]],
+        resize_keyboard=True,
+    )
     labels = t(lang, "menu")
     rows = [
         [KeyboardButton(text=labels[0]), KeyboardButton(text=labels[1])],
@@ -344,24 +370,24 @@ def main_kb(uid: int, lang: str = "az") -> ReplyKeyboardMarkup:
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    if is_admin(message.from_user.id):
-        await db.set_status(message.from_user.id, "approved") if await db.get(message.from_user.id) else None
-        await message.answer(
-            "Admin, salam. Sən növbədə deyilsən. Düymələr aşağıdadır, yoxla.",
-            reply_markup=main_kb(message.from_user.id, "az"),
-        )
-        return
-    if await db.is_blacklisted(message.from_user.id):
+    if await db.is_blacklisted(message.from_user.id) and not is_admin(message.from_user.id):
         await message.answer("Bu hesab qara siyahıdadır. Yenidən qeydiyyat bağlıdır.")
         return
     arg = ""
     if message.text and " " in message.text:
         arg = message.text.split(maxsplit=1)[1]
-    if arg == "yenile":
-        user = None
-    else:
-        user = await db.get(message.from_user.id)
+    user = None if arg == "yenile" else await db.get(message.from_user.id)
+    if is_admin(message.from_user.id) and user:
+        await db.set_status(message.from_user.id, "approved")
     if user and user["photo_id"] and user["status"] != "rejected" and arg != "yenile":
+        lang = user["lang"] or "az"
+        await vibe(message, "hi")
+        status = {"approved": t(lang, "st_ok"), "pending": t(lang, "st_wait"), "banned": t(lang, "st_ban")}.get(user["status"], t(lang, "st_ok"))
+        extra = "\nAdmin panel aşağıdadır, lent də sənin üçündür." if is_admin(message.from_user.id) else ""
+        await message.answer(t(lang, "back").format(name=user["name"], status=status) + extra, reply_markup=main_kb(message.from_user.id, lang))
+        return
+    if is_admin(message.from_user.id) and not user:
+        await message.answer("Admin panel açıqdır. Öz anketin üçün dili seç, adi istifadəçi kimi davam edə bilərsən.", reply_markup=main_kb(message.from_user.id, "az"))
         lang = user["lang"] or "az"
         await vibe(message, "hi")
         status = {"approved": t(lang, "st_ok"), "pending": t(lang, "st_wait"), "banned": t(lang, "st_ban")}.get(user["status"], t(lang, "st_ok"))
@@ -416,20 +442,30 @@ async def reg_name(message: Message, state: FSMContext) -> None:
 
 @router.message(Reg.age)
 async def reg_age(message: Message, state: FSMContext) -> None:
-    if not (message.text or "").isdigit():
-        await message.answer("Yalnız rəqəm.")
-        return
-    age = int(message.text)
-    if age < 18:
-        await message.answer("18-dən aşağı qəbul edilmir.")
-        return
-    if age > 70:
-        await message.answer("18–70 arası yaz.")
+    age = parse_age(message.text or "")
+    if not age:
+        await message.answer("Yaşı rəqəmlə yaz, məsələn 23. Doğum ili də olar: 2002. 18-dən aşağı olmaz.")
         return
     await state.update_data(age=age)
+    await message.answer(f"{age} yaş qeyd olundu. Təhlükəsizlik üçün nömrəni düymədən göndər.", reply_markup=phone_kb())
+    await state.set_state(Reg.phone)
+
+
+@router.message(Reg.phone, F.contact)
+async def reg_phone(message: Message, state: FSMContext) -> None:
+    contact = message.contact
+    if contact.user_id and contact.user_id != message.from_user.id:
+        await message.answer("Öz nömrəni göndər.", reply_markup=phone_kb())
+        return
+    await state.update_data(phone=contact.phone_number)
     lang = (await state.get_data()).get("lang") or "az"
     await message.answer(t(lang, "city"), reply_markup=city_kb())
     await state.set_state(Reg.city)
+
+
+@router.message(Reg.phone)
+async def reg_phone_bad(message: Message) -> None:
+    await message.answer("Nömrəni əl ilə yazma. Aşağıdakı düyməyə bas.", reply_markup=phone_kb())
 
 
 @router.callback_query(Reg.city, F.data.startswith("c:"))
@@ -494,6 +530,8 @@ async def reg_photo(message: Message, state: FSMContext, bot: Bot) -> None:
     }
     await db.save_profile(payload)
     await db.set_field(message.from_user.id, "lang", data.get("lang") or "az")
+    if data.get("phone"):
+        await db.set_field(message.from_user.id, "phone", data["phone"])
     if payload["referrer"]:
         ref = await db.get(payload["referrer"])
         if ref:
@@ -1199,6 +1237,22 @@ async def jobs(bot: Bot) -> None:
         except Exception:
             logging.exception("jobs")
         await asyncio.sleep(600)
+
+
+@router.message()
+async def recover_age(message: Message, state: FSMContext) -> None:
+    if await state.get_state():
+        return
+    user = await db.get(message.from_user.id)
+    if user and user["photo_id"]:
+        return
+    age = parse_age(message.text or "")
+    if not age:
+        await message.answer("Qeydiyyat yarımçıq qalıb. /start yaz, qaldığın yerdən davam edək. Yaşı yenidən 23 kimi göndərə bilərsən.")
+        return
+    await state.update_data(age=age, lang="az")
+    await message.answer(f"{age} yaş qeyd olundu. Davam edirik. Nömrəni düymədən göndər.", reply_markup=phone_kb())
+    await state.set_state(Reg.phone)
 
 
 async def main() -> None:
