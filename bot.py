@@ -74,6 +74,9 @@ MENU_LIKES = {"👀 Məni bəyənənlər", "Məni bəyənənlər", "👀 Bəyən
 MENU_PAY = {"💎 Ödəniş", "Ödəniş", "👑 Premium", "Premium", "⭐ Superlike", "Superlike", "💎 Оплата", "👑 Премиум", "⭐ Суперлайк", "💎 Pay", "👑 Premium", "⭐ Superlike"}
 MENU_LOC = {"📍 Konum yenilə", "Konum yenilə", "📍 Konum", "📍 Гео", "📍 Location"}
 REASONS = ["Saxta şəkil", "18-dən aşağı", "Təhqir", "Spam", "Digər"]
+CITIES = ["Bakı", "Nəsimi", "Yasamal", "Xətai", "Nərimanov", "Gəncə", "Sumqayıt", "Mingəçevir", "Şəki", "Lənkəran", "Naxçıvan", "Qəbələ", "Digər"]
+BANNED_NICKS = {"king", "baby", "qaqa", "boss", "sexy", "vip", "admin"}
+REJECT_REASONS = ["Şəkil sənin deyil", "Üz görünmür", "18 şübhəlidir", "Nömrə uyğun deyil"]
 
 
 class Reg(StatesGroup):
@@ -177,6 +180,10 @@ def dist_text(me, other) -> str:
     if not me or not other or not me["lat"] or not other["lat"]:
         return other["city"] if other else "—"
     km = haversine(me["lat"], me["lon"], other["lat"], other["lon"])
+    if km < 5:
+        return f"çox yaxın · {km:.1f} km"
+    if km > 40 and me["city"] == other["city"]:
+        return f"eyni şəhər, uzaq · {km:.1f} km"
     if km < 1:
         return f"{int(km * 1000)} m"
     return f"{km:.1f} km"
@@ -214,7 +221,7 @@ async def show_next(message: Message, user_id: int) -> None:
         return
     row = await db.next_profile(me)
     if not row:
-        await message.answer(NO_PROFILES, reply_markup=main_kb(user_id))
+        await message.answer("Yaxınlıqda bitdi. Başqa şəhərlərə keçirəm.")
         return
     await send_card(message, row, me)
 
@@ -350,12 +357,10 @@ def parse_age(text: str):
     return None
 
 
-def phone_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📱 Nömrəmi göndər", request_contact=True)]],
-        resize_keyboard=True,
-    )
+def main_kb(uid: int, lang: str = "az") -> ReplyKeyboardMarkup:
     labels = t(lang, "menu")
+    if not isinstance(labels, list):
+        labels = ["🔥 Lent", "💛 Profilim", "💬 Matçlar", "👀 Bəyənmələr", "⭐ Superlike", "💎 Ödəniş", "👑 Premium", "📍 Konum"]
     rows = [
         [KeyboardButton(text=labels[0]), KeyboardButton(text=labels[1])],
         [KeyboardButton(text=labels[2]), KeyboardButton(text=labels[3])],
@@ -367,36 +372,38 @@ def phone_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
+def phone_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📱 Nömrəmi göndər", request_contact=True)]],
+        resize_keyboard=True,
+    )
+
+
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    if await db.is_blacklisted(message.from_user.id) and not is_admin(message.from_user.id):
-        await message.answer("Bu hesab qara siyahıdadır. Yenidən qeydiyyat bağlıdır.")
-        return
-    arg = ""
-    if message.text and " " in message.text:
-        arg = message.text.split(maxsplit=1)[1]
-    user = None if arg == "yenile" else await db.get(message.from_user.id)
-    if is_admin(message.from_user.id) and user:
-        await db.set_status(message.from_user.id, "approved")
-    if user and user["photo_id"] and user["status"] != "rejected" and arg != "yenile":
-        lang = user["lang"] or "az"
-        await vibe(message, "hi")
-        status = {"approved": t(lang, "st_ok"), "pending": t(lang, "st_wait"), "banned": t(lang, "st_ban")}.get(user["status"], t(lang, "st_ok"))
-        extra = "\nAdmin panel aşağıdadır, lent də sənin üçündür." if is_admin(message.from_user.id) else ""
-        await message.answer(t(lang, "back").format(name=user["name"], status=status) + extra, reply_markup=main_kb(message.from_user.id, lang))
-        return
-    if is_admin(message.from_user.id) and not user:
-        await message.answer("Admin panel açıqdır. Öz anketin üçün dili seç, adi istifadəçi kimi davam edə bilərsən.", reply_markup=main_kb(message.from_user.id, "az"))
-        lang = user["lang"] or "az"
-        await vibe(message, "hi")
-        status = {"approved": t(lang, "st_ok"), "pending": t(lang, "st_wait"), "banned": t(lang, "st_ban")}.get(user["status"], t(lang, "st_ok"))
-        await message.answer(t(lang, "back").format(name=user["name"], status=status), reply_markup=main_kb(message.from_user.id, lang))
-        return
-    ref = int(arg[3:]) if arg.startswith("ref") and arg[3:].isdigit() else None
-    await state.update_data(referrer=ref)
-    await message.answer(t("az", "pick") + "\n\n" + t("ru", "pick") + "\n\n" + t("en", "pick"), reply_markup=lang_kb())
-    await state.set_state(Reg.gender)
+    try:
+        await state.clear()
+        if await db.is_blacklisted(message.from_user.id) and not is_admin(message.from_user.id):
+            await message.answer("Bu hesab qara siyahıdadır. Yenidən qeydiyyat bağlıdır.")
+            return
+        arg = message.text.split(maxsplit=1)[1] if message.text and " " in message.text else ""
+        user = None if arg == "yenile" else await db.get(message.from_user.id)
+        if is_admin(message.from_user.id) and user:
+            await db.set_status(message.from_user.id, "approved")
+        if user and user["photo_id"] and user["status"] != "rejected" and arg != "yenile":
+            lang = user["lang"] or "az"
+            status = {"approved": t(lang, "st_ok"), "pending": t(lang, "st_wait"), "banned": t(lang, "st_ban")}.get(user["status"], t(lang, "st_ok"))
+            extra = "\nAdmin panel aşağıdadır. Lent də sənin üçündür." if is_admin(message.from_user.id) else ""
+            await message.answer(t(lang, "back").format(name=user["name"], status=status) + extra, reply_markup=main_kb(message.from_user.id, lang))
+            return
+        if is_admin(message.from_user.id):
+            await message.answer("Admin panel açıqdır. Öz anketin üçün dili seç.", reply_markup=main_kb(message.from_user.id, "az"))
+        await state.update_data(referrer=int(arg[3:]) if arg.startswith("ref") and arg[3:].isdigit() else None)
+        await message.answer("Salam. Dili seç.\n\nПривет. Выбери язык.\n\nHey. Pick a language.", reply_markup=lang_kb())
+        await state.set_state(Reg.gender)
+    except Exception:
+        logging.exception("start failed")
+        await message.answer("Bir xəta oldu, yenidən /start yaz. Bu dəfə açılacaq.")
 
 
 @router.callback_query(F.data.startswith("lang:"))
@@ -431,8 +438,8 @@ async def reg_looking(cb: CallbackQuery, state: FSMContext) -> None:
 @router.message(Reg.name)
 async def reg_name(message: Message, state: FSMContext) -> None:
     name = (message.text or "").strip()
-    if not re.fullmatch(r"[A-Za-zƏəÖöÜüIıÇçŞşĞğА-Яа-яЁё][A-Za-zƏəÖöÜüIıÇçŞşĞğА-Яа-яЁё \-]{1,23}", name):
-        await message.answer("Ad 2–24 hərf olsun. / Имя 2–24 буквы. / Name: 2–24 letters.")
+    if name.lower() in BANNED_NICKS:
+        await message.answer("Ləqəb olmaz. Öz adını yaz.")
         return
     lang = (await state.get_data()).get("lang") or "az"
     await state.update_data(name=name)
@@ -447,8 +454,27 @@ async def reg_age(message: Message, state: FSMContext) -> None:
         await message.answer("Yaşı rəqəmlə yaz, məsələn 23. Doğum ili də olar: 2002. 18-dən aşağı olmaz.")
         return
     await state.update_data(age=age)
-    await message.answer(f"{age} yaş qeyd olundu. Təhlükəsizlik üçün nömrəni düymədən göndər.", reply_markup=phone_kb())
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=f"Bəli, {age}", callback_data="ageok"),
+        InlineKeyboardButton(text="Yenidən", callback_data="ageno"),
+    ]])
+    note = " 18 yaş əlavə yoxlamaya düşəcək." if age == 18 else ""
+    await message.answer(f"{age} yaş, düzdür?{note}", reply_markup=kb)
     await state.set_state(Reg.phone)
+
+
+@router.callback_query(F.data == "ageok")
+async def age_ok(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.message.answer("Təhlükəsizlik üçün nömrəni düymədən göndər. Nömrə yalnız mənə görünür.", reply_markup=phone_kb())
+    await state.set_state(Reg.phone)
+    await cb.answer()
+
+
+@router.callback_query(F.data == "ageno")
+async def age_no(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.message.answer("Yaşı yenidən yaz.")
+    await state.set_state(Reg.age)
+    await cb.answer()
 
 
 @router.message(Reg.phone, F.contact)
@@ -500,8 +526,8 @@ async def reg_loc_bad(message: Message) -> None:
 @router.message(Reg.bio)
 async def reg_bio(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
-    if text == "/skip":
-        text = ""
+    if text == "/skip" or not text:
+        text = "Çay, gəzinti, sakit söhbət."
     if len(text) > 300:
         await message.answer("300 simvoldan qısa.")
         return
@@ -513,6 +539,10 @@ async def reg_bio(message: Message, state: FSMContext) -> None:
 
 @router.message(Reg.photo, F.photo)
 async def reg_photo(message: Message, state: FSMContext, bot: Bot) -> None:
+    photo = message.photo[-1]
+    if photo.file_size and photo.file_size < 25000:
+        await message.answer("Şəkil çox kiçikdir, üz görünmür. Daha aydın şəkil göndər.")
+        return
     data = await state.get_data()
     payload = {
         "user_id": message.from_user.id,
@@ -523,7 +553,7 @@ async def reg_photo(message: Message, state: FSMContext, bot: Bot) -> None:
         "looking": data["looking"],
         "city": data["city"],
         "bio": data.get("bio") or "",
-        "photo_id": message.photo[-1].file_id,
+        "photo_id": photo.file_id,
         "lat": data["lat"],
         "lon": data["lon"],
         "referrer": data.get("referrer"),
@@ -539,7 +569,7 @@ async def reg_photo(message: Message, state: FSMContext, bot: Bot) -> None:
     await state.clear()
     total, _, _, _ = await db.counts()
     min_users = await db.setting("min_users", "100")
-    await message.answer(PENDING.format(min=min_users, total=total), reply_markup=main_kb(message.from_user.id))
+    await message.answer(PENDING.format(min=min_users, total=total) + f"\nNövbədə: {total}.", reply_markup=main_kb(message.from_user.id))
     row = await db.get(message.from_user.id)
     await send_review(bot, row)
 
@@ -873,7 +903,11 @@ async def buy(cb: CallbackQuery, bot: Bot) -> None:
         "super": ("1 Superlike", "Bir superlike krediti", PRICE_SUPER, f"super:{cb.from_user.id}"),
         "premium": ("Premium 7 gün", "Limitsiz bəyənmə və sarı tik", PRICE_PREMIUM, f"premium:{cb.from_user.id}"),
     }
-    title, desc, amount, payload = catalog[kind]
+    if kind == "premium":
+        row = await db.get(cb.from_user.id)
+        if not row or row["status"] != "approved":
+            await cb.answer("Premium yalnız təsdiqlənmiş hesaba açılır.", show_alert=True)
+            return
     await bot.send_invoice(
         cb.from_user.id, title, desc, payload, "XTR",
         [LabeledPrice(label=title, amount=amount)], provider_token="",
@@ -903,7 +937,7 @@ async def paid(message: Message, bot: Bot) -> None:
         until = await db.grant_premium(uid, PREMIUM_DAYS)
         await message.answer(f"Premium aktivdir, {until}-dək. Adında sarı tik görünəcək.")
     row = await db.get(uid)
-    await notify_admins(bot, f"Ödəniş: {row['name'] if row else uid} · {kind} · {stars} Stars · id {uid}")
+    await notify_admins(bot, f"Ödəniş: {row['name'] if row else uid} · {kind} · {stars} Stars · {row['phone'] if row else '—'} · id {uid}")
 
 
 @router.message(F.text.in_({"🛠 Admin panel", "Admin", "admin"}))
@@ -1021,12 +1055,11 @@ async def adm_act(cb: CallbackQuery, bot: Bot, state: FSMContext) -> None:
         await cb.answer("Təsdiqləndi.")
         return
     if action == "no":
-        await db.set_status(uid, "rejected")
-        try:
-            await bot.send_message(uid, REJECTED)
-        except Exception:
-            pass
-        await cb.answer("Rədd edildi.")
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=r, callback_data=f"why:{uid}:{i}")] for i, r in enumerate(REJECT_REASONS)
+        ])
+        await cb.message.answer("Rədd səbəbi:", reply_markup=kb)
+        await cb.answer()
         return
     if action == "ban":
         await db.set_status(uid, "banned")
@@ -1173,7 +1206,47 @@ async def grant_cmd(message: Message, bot: Bot) -> None:
     await message.answer(until)
 
 
-@router.message(Command("qeyd"))
+@router.callback_query(F.data.startswith("why:"))
+async def why_no(cb: CallbackQuery, bot: Bot) -> None:
+    if not is_admin(cb.from_user.id):
+        return
+    _, uid, idx = cb.data.split(":")
+    reason = REJECT_REASONS[int(idx)]
+    await db.set_status(int(uid), "rejected")
+    try:
+        await bot.send_message(int(uid), f"Hesab təsdiqlənmədi. Səbəb: {reason}. Yenidən /start.")
+    except Exception:
+        pass
+    await cb.answer("Rədd göndərildi.")
+
+
+@router.message(Command("say"))
+async def say_cmd(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    total, pending, approved, banned = await db.counts()
+    await message.answer(f"Canlı: {total} nəfər · gözləyən {pending} · açıq {approved} · ban {banned}")
+
+
+@router.message(Command("testanket"))
+async def test_profile(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    await db.save_profile({
+        "user_id": 900000001, "username": "test", "name": "Test", "age": 24,
+        "gender": "qiz", "looking": "hami", "city": "Bakı", "bio": "Test anket",
+        "photo_id": "test", "lat": 40.4, "lon": 49.8, "referrer": None,
+    })
+    await db.set_status(900000001, "approved")
+    await message.answer("Test anket yarandı. Silmək: /testdel")
+
+
+@router.message(Command("testdel"))
+async def test_del(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    await db.set_status(900000001, "banned")
+    await message.answer("Test anket bağlandı.")
 async def note_cmd(message: Message) -> None:
     if not is_admin(message.from_user.id):
         return
@@ -1201,7 +1274,22 @@ async def jobs(bot: Bot) -> None:
     while True:
         try:
             hour = datetime.now(timezone.utc).hour
-            if hour == 16 and await db.setting("night_ping", "") != today():
+            if hour == 5 and await db.setting("morning", "") != today():
+                await db.set_setting("morning", today())
+                total, pending, approved, banned = await db.counts()
+                await notify_admins(bot, f"Sabah xülasəsi. Hazırdır.\nÜmumi {total} · gözləyən {pending} · açıq {approved} · ban {banned}")
+            if int(datetime.now(timezone.utc).minute) < 8:
+                try:
+                    await bot.get_me()
+                except Exception:
+                    pass
+            if hour == 1 and await db.setting("backup", "") != today():
+                await db.set_setting("backup", today())
+                try:
+                    import shutil
+                    shutil.copy(DB_PATH, DB_PATH + "." + today() + ".bak")
+                except Exception:
+                    logging.exception("backup")
                 await db.set_setting("night_ping", today())
                 for uid in await db.approved_ids():
                     try:
@@ -1253,6 +1341,12 @@ async def recover_age(message: Message, state: FSMContext) -> None:
     await state.update_data(age=age, lang="az")
     await message.answer(f"{age} yaş qeyd olundu. Davam edirik. Nömrəni düymədən göndər.", reply_markup=phone_kb())
     await state.set_state(Reg.phone)
+
+
+@router.errors()
+async def on_error(event) -> bool:
+    logging.exception("update error: %s", event.exception)
+    return True
 
 
 async def main() -> None:
