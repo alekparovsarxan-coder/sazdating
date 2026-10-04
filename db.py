@@ -121,7 +121,7 @@ class DB:
                 ("lang", "TEXT"), ("city_only", "INTEGER"), ("hidden_until", "TEXT"),
                 ("admin_note", "TEXT"), ("phone", "TEXT"), ("boost_day", "TEXT"),
                 ("last_seen", "TEXT"), ("photo_uid", "TEXT"), ("views_today", "INTEGER"),
-                ("views_day", "TEXT"), ("bday", "TEXT"), ("campaign", "TEXT"),
+                ("views_day", "TEXT"), ("bday", "TEXT"), ("campaign", "TEXT"), ("coins", "INTEGER"),
             ):
                 try:
                     await db.execute(f"ALTER TABLE users ADD COLUMN {col} {kind}")
@@ -217,7 +217,31 @@ class DB:
             )
             await db.commit()
 
-    async def add_super(self, user_id: int, n: int) -> None:
+    async def add_coins(self, user_id: int, n: int) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE users SET coins=COALESCE(coins,0)+? WHERE user_id=?", (n, user_id)
+            )
+            await db.commit()
+        row = await self.get(user_id)
+        return row["coins"] or 0
+
+    async def spend_coins(self, user_id: int, n: int) -> bool:
+        row = await self.get(user_id)
+        have = (row["coins"] or 0) if row else 0
+        if have < n:
+            return False
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("UPDATE users SET coins=coins-? WHERE user_id=?", (n, user_id))
+            await db.commit()
+        return True
+
+    async def find_phone(self, phone: str):
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM users WHERE phone LIKE ?", (f"%{digits[-9:]}%",))
+            return await cur.fetchone()
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
                 "UPDATE users SET super_credits=super_credits+? WHERE user_id=?", (n, user_id)

@@ -60,10 +60,15 @@ extra = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") 
 ADMIN_IDS |= extra
 DB_PATH = os.getenv("DB_PATH", "sazdating.db")
 FREE_LIKES = 30
+PACKS = {
+    "likes": ("30 bəyənmə", 35, "3.50 AZN"),
+    "super": ("1 superlike", 10, "1.00 AZN"),
+    "premium": ("Premium 7 gün", 340, "34 AZN"),
+}
+PREMIUM_DAYS = 7
 PRICE_LIKES = 100
 PRICE_SUPER = 25
 PRICE_PREMIUM = 1000
-PREMIUM_DAYS = 7
 
 router = Router()
 db = DB(DB_PATH)
@@ -165,9 +170,10 @@ def card_kb(uid: int) -> InlineKeyboardMarkup:
 
 def pay_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="+30 bəyənmə · 100 Stars", callback_data="buy:likes")],
-        [InlineKeyboardButton(text="1 Superlike · 25 Stars", callback_data="buy:super")],
-        [InlineKeyboardButton(text="Premium 7 gün · 1000 Stars", callback_data="buy:premium")],
+        [InlineKeyboardButton(text="30 bəyənmə · 35 SazCoin", callback_data="coin:likes")],
+        [InlineKeyboardButton(text="1 Superlike · 10 SazCoin", callback_data="coin:super")],
+        [InlineKeyboardButton(text="Premium 7 gün · 340 SazCoin", callback_data="coin:premium")],
+        [InlineKeyboardButton(text="Balans artır", callback_data="coin:topup")],
     ])
 
 
@@ -936,7 +942,77 @@ async def pay_menu(message: Message) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("buy:"))
+@router.callback_query(F.data.startswith("coin:"))
+async def coin_buy(cb: CallbackQuery, bot: Bot) -> None:
+    kind = cb.data.split(":")[1]
+    row = await db.get(cb.from_user.id)
+    if not row:
+        await cb.answer("Əvvəl anketi bitir.", show_alert=True)
+        return
+    if kind == "topup":
+        text = (
+            f"Salam, SazCoin almaq istəyirəm.\n"
+            f"Ad: {row['name']}\nNömrə: {row['phone'] or '—'}\n"
+            f"ID: {cb.from_user.id}\nNə qədər: "
+        )
+        await cb.message.answer(
+            "Balans kartla artırılır. Bu hazır mesajı mənə göndər, kartı yazacam.\n\n" + text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Adminə yaz", url=f"tg://user?id={OWNER_ID}")
+            ]]),
+        )
+        await notify_admins(bot, "Balans sorğusu\n" + text)
+        await cb.answer()
+        return
+    title, price, manat = PACKS[kind]
+    if kind == "premium" and row["status"] != "approved":
+        await cb.answer("Premium yalnız təsdiqdən sonra.", show_alert=True)
+        return
+    if not await db.spend_coins(cb.from_user.id, price):
+        order = (
+            f"Salam, SazCoin almaq istəyirəm.\n"
+            f"{title} · {price} SazCoin · {manat}\n"
+            f"Ad: {row['name']}\nNömrə: {row['phone'] or '—'}\nID: {cb.from_user.id}"
+        )
+        await cb.message.answer(
+            f"Balans çatmır. {title} = {price} SazCoin ({manat}).\n\nHazır mesaj:\n{order}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Adminə yaz", url=f"tg://user?id={OWNER_ID}")
+            ]]),
+        )
+        await notify_admins(bot, "Sifariş\n" + order)
+        await cb.answer()
+        return
+    if kind == "likes":
+        await db.add_extra_likes(cb.from_user.id, 30)
+        await cb.message.answer("35 SazCoin çıxdı. +30 bəyənmə əlavə olundu.")
+    elif kind == "super":
+        await db.add_super(cb.from_user.id, 1)
+        await cb.message.answer("10 SazCoin çıxdı. 1 superlike əlavə olundu.")
+    else:
+        until = await db.grant_premium(cb.from_user.id, 7)
+        await cb.message.answer(f"340 SazCoin çıxdı. Premium {until}-dək.")
+    await cb.answer()
+
+
+@router.message(Command("coin"))
+async def coin_cmd(message: Message, bot: Bot) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 3:
+        await message.answer("/coin 994501112233 35")
+        return
+    user = await db.find_phone(parts[1])
+    if not user:
+        await message.answer("Bu nömrə tapılmadı.")
+        return
+    bal = await db.add_coins(user["user_id"], int(parts[2]))
+    try:
+        await bot.send_message(user["user_id"], f"Balansın artırıldı: +{parts[2]} SazCoin. İndi: {bal}.")
+    except Exception:
+        pass
+    await message.answer(f"{user['name']} · {user['phone']} · balans {bal}")
 async def buy(cb: CallbackQuery, bot: Bot) -> None:
     kind = cb.data.split(":")[1]
     catalog = {
