@@ -24,6 +24,7 @@ from aiogram.types import (
 from dotenv import load_dotenv
 
 from db import DB, haversine
+from i18n import t
 from texts import (
     APPROVED,
     ASK_AGE,
@@ -66,7 +67,12 @@ PREMIUM_DAYS = 7
 
 router = Router()
 db = DB(DB_PATH)
-CITIES = ["Bakı", "Gəncə", "Sumqayıt", "Mingəçevir", "Şəki", "Lənkəran", "Naxçıvan", "Qəbələ", "Digər"]
+MENU_FEED = {"🔥 Lent", "Lent", "🔥 Лента", "🔥 Feed"}
+MENU_PROFILE = {"💛 Profilim", "Profilim", "💛 Профиль", "💛 Profile"}
+MENU_MATCH = {"💬 Matçlar", "Matçlar", "💬 Мэтчи", "💬 Matches"}
+MENU_LIKES = {"👀 Məni bəyənənlər", "Məni bəyənənlər", "👀 Bəyənmələr", "👀 Лайки", "👀 Likes"}
+MENU_PAY = {"💎 Ödəniş", "Ödəniş", "👑 Premium", "Premium", "⭐ Superlike", "Superlike", "💎 Оплата", "👑 Премиум", "⭐ Суперлайк", "💎 Pay", "👑 Premium", "⭐ Superlike"}
+MENU_LOC = {"📍 Konum yenilə", "Konum yenilə", "📍 Konum", "📍 Гео", "📍 Location"}
 REASONS = ["Saxta şəkil", "18-dən aşağı", "Təhqir", "Spam", "Digər"]
 
 
@@ -224,58 +230,108 @@ async def notify_admins(bot: Bot, text: str, photo: str | None = None, kb=None) 
 
 
 async def vibe(message: Message, key: str) -> None:
-    stickers = {
-        "hi": "CAACAgIAAxkBAAEP0aVn1nC0r3o3nQABQ0oZ0m0Z0m0Z0m0AAvoAAygPOxY6k0Z0m0Z0m0Z0BA",
-        "love": "CAACAgIAAxkBAAEP0aln1nC0r3o3nQABQ0oZ0m0Z0m0Z0m0AAvoAAygPOxY6k0Z0m0Z0m0Z0BA",
-    }
+    file_id = await db.setting(f"sticker:{key}", "")
+    if not file_id:
+        file_id = await db.setting("sticker:hi", "")
+    if not file_id:
+        return
     try:
-        await message.answer_sticker(stickers.get(key, stickers["hi"]))
+        await message.answer_sticker(file_id)
     except Exception:
-        pass
+        logging.exception("sticker failed")
+
+
+def lang_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Azərbaycan", callback_data="lang:az"),
+        InlineKeyboardButton(text="Русский", callback_data="lang:ru"),
+        InlineKeyboardButton(text="English", callback_data="lang:en"),
+    ]])
+
+
+def gender_kb(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(lang, "boy"), callback_data="g:oglan"),
+        InlineKeyboardButton(text=t(lang, "girl"), callback_data="g:qiz"),
+    ]])
+
+
+def looking_kb(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=t(lang, "girl"), callback_data="l:qiz"),
+            InlineKeyboardButton(text=t(lang, "boy"), callback_data="l:oglan"),
+        ],
+        [InlineKeyboardButton(text=t(lang, "all"), callback_data="l:hami")],
+    ])
+
+
+def loc_kb(lang: str) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=t(lang, "loc_btn"), request_location=True)]],
+        resize_keyboard=True,
+    )
+
+
+def main_kb(uid: int, lang: str = "az") -> ReplyKeyboardMarkup:
+    labels = t(lang, "menu")
+    rows = [
+        [KeyboardButton(text=labels[0]), KeyboardButton(text=labels[1])],
+        [KeyboardButton(text=labels[2]), KeyboardButton(text=labels[3])],
+        [KeyboardButton(text=labels[4]), KeyboardButton(text=labels[5])],
+        [KeyboardButton(text=labels[6]), KeyboardButton(text=labels[7])],
+    ]
+    if is_admin(uid):
+        rows.append([KeyboardButton(text="🛠 Admin panel")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext) -> None:
     await state.clear()
     user = await db.get(message.from_user.id)
-    if user and user["photo_id"] and user["status"] != "rejected":
-        await vibe(message, "hi")
-        status = {
-            "approved": "Hesabın açıqdır, lent səni gözləyir.",
-            "pending": "Hələ yoxlamadasan. Təsdiq olanda yazacam.",
-            "banned": BANNED,
-        }.get(user["status"], "Yenidən salam.")
-        await message.answer(
-            f"Yenidən salam, {user['name']}. 💛\n{status}\nEyni sualları bir daha vermirəm.",
-            reply_markup=main_kb(message.from_user.id),
-        )
-        return
-    ref = None
+    arg = ""
     if message.text and " " in message.text:
         arg = message.text.split(maxsplit=1)[1]
-        if arg.startswith("ref") and arg[3:].isdigit():
-            ref = int(arg[3:])
-        if arg == "yenile":
-            ref = None
+    if arg == "yenile":
+        user = None
+    if user and user["photo_id"] and user["status"] != "rejected" and arg != "yenile":
+        lang = user["lang"] or "az"
+        await vibe(message, "hi")
+        status = {"approved": t(lang, "st_ok"), "pending": t(lang, "st_wait"), "banned": t(lang, "st_ban")}.get(user["status"], t(lang, "st_ok"))
+        await message.answer(t(lang, "back").format(name=user["name"], status=status), reply_markup=main_kb(message.from_user.id, lang))
+        return
+    ref = int(arg[3:]) if arg.startswith("ref") and arg[3:].isdigit() else None
     await state.update_data(referrer=ref)
-    await vibe(message, "hi")
-    await message.answer(WELCOME, reply_markup=ReplyKeyboardRemove())
-    await message.answer(ASK_GENDER, reply_markup=gender_kb())
+    await message.answer(t("az", "pick") + "\n\n" + t("ru", "pick") + "\n\n" + t("en", "pick"), reply_markup=lang_kb())
     await state.set_state(Reg.gender)
+
+
+@router.callback_query(F.data.startswith("lang:"))
+async def pick_lang(cb: CallbackQuery, state: FSMContext) -> None:
+    lang = cb.data.split(":")[1]
+    await state.update_data(lang=lang)
+    await state.set_state(Reg.gender)
+    await cb.message.answer(t(lang, "welcome"))
+    await cb.message.answer(t(lang, "gender"), reply_markup=gender_kb(lang))
+    await cb.answer()
 
 
 @router.callback_query(Reg.gender, F.data.startswith("g:"))
 async def reg_gender(cb: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    lang = data.get("lang") or "az"
     await state.update_data(gender=cb.data.split(":")[1])
-    await cb.message.edit_text(ASK_LOOKING, reply_markup=looking_kb())
+    await cb.message.edit_text(t(lang, "looking"), reply_markup=looking_kb(lang))
     await state.set_state(Reg.looking)
     await cb.answer()
 
 
 @router.callback_query(Reg.looking, F.data.startswith("l:"))
 async def reg_looking(cb: CallbackQuery, state: FSMContext) -> None:
+    lang = (await state.get_data()).get("lang") or "az"
     await state.update_data(looking=cb.data.split(":")[1])
-    await cb.message.edit_text(ASK_NAME)
+    await cb.message.edit_text(t(lang, "name"))
     await state.set_state(Reg.name)
     await cb.answer()
 
@@ -283,11 +339,12 @@ async def reg_looking(cb: CallbackQuery, state: FSMContext) -> None:
 @router.message(Reg.name)
 async def reg_name(message: Message, state: FSMContext) -> None:
     name = (message.text or "").strip()
-    if not re.fullmatch(r"[A-Za-zƏəÖöÜüIıÇçŞşĞğ][A-Za-zƏəÖöÜüIıÇçŞşĞğ \-]{1,23}", name):
-        await message.answer("Ad 2–24 hərf olsun.")
+    if not re.fullmatch(r"[A-Za-zƏəÖöÜüIıÇçŞşĞğА-Яа-яЁё][A-Za-zƏəÖöÜüIıÇçŞşĞğА-Яа-яЁё \-]{1,23}", name):
+        await message.answer("Ad 2–24 hərf olsun. / Имя 2–24 буквы. / Name: 2–24 letters.")
         return
+    lang = (await state.get_data()).get("lang") or "az"
     await state.update_data(name=name)
-    await message.answer(ASK_AGE)
+    await message.answer(t(lang, "age"))
     await state.set_state(Reg.age)
 
 
@@ -304,14 +361,16 @@ async def reg_age(message: Message, state: FSMContext) -> None:
         await message.answer("18–70 arası yaz.")
         return
     await state.update_data(age=age)
-    await message.answer(ASK_CITY, reply_markup=city_kb())
+    lang = (await state.get_data()).get("lang") or "az"
+    await message.answer(t(lang, "city"), reply_markup=city_kb())
     await state.set_state(Reg.city)
 
 
 @router.callback_query(Reg.city, F.data.startswith("c:"))
 async def reg_city(cb: CallbackQuery, state: FSMContext) -> None:
+    lang = (await state.get_data()).get("lang") or "az"
     await state.update_data(city=cb.data.split(":", 1)[1])
-    await cb.message.answer(ASK_LOC, reply_markup=loc_kb())
+    await cb.message.answer(t(lang, "loc"), reply_markup=loc_kb(lang))
     await state.set_state(Reg.loc)
     await cb.answer()
 
@@ -326,7 +385,8 @@ async def reg_loc(message: Message, state: FSMContext) -> None:
         await message.answer("Konum yeniləndi. Yaxın anketlər buna görə gələcək.", reply_markup=main_kb(message.from_user.id))
         return
     await state.update_data(lat=message.location.latitude, lon=message.location.longitude)
-    await message.answer(ASK_BIO, reply_markup=ReplyKeyboardRemove())
+    lang = (await state.get_data()).get("lang") or "az"
+    await message.answer(t(lang, "bio"), reply_markup=ReplyKeyboardRemove())
     await state.set_state(Reg.bio)
 
 
@@ -344,7 +404,8 @@ async def reg_bio(message: Message, state: FSMContext) -> None:
         await message.answer("300 simvoldan qısa.")
         return
     await state.update_data(bio=text)
-    await message.answer(ASK_PHOTO)
+    lang = (await state.get_data()).get("lang") or "az"
+    await message.answer(t(lang, "photo"))
     await state.set_state(Reg.photo)
 
 
@@ -366,6 +427,7 @@ async def reg_photo(message: Message, state: FSMContext, bot: Bot) -> None:
         "referrer": data.get("referrer"),
     }
     await db.save_profile(payload)
+    await db.set_field(message.from_user.id, "lang", data.get("lang") or "az")
     if payload["referrer"]:
         ref = await db.get(payload["referrer"])
         if ref:
@@ -402,13 +464,13 @@ async def reg_photo_bad(message: Message) -> None:
     await message.answer("Şəkil göndər.")
 
 
-@router.message(F.text.in_({"🔥 Lent", "Lent"}))
+@router.message(F.text.in_(MENU_FEED))
 async def feed(message: Message) -> None:
     if await gate(message):
         await show_next(message, message.from_user.id)
 
 
-@router.message(F.text.in_({"💛 Profilim", "Profilim"}))
+@router.message(F.text.in_(MENU_PROFILE))
 async def my_profile(message: Message) -> None:
     row = await db.get(message.from_user.id)
     if not row or not row["photo_id"]:
@@ -477,7 +539,7 @@ async def edit_bio(message: Message, state: FSMContext) -> None:
     await message.answer("Bio yeniləndi.", reply_markup=main_kb(message.from_user.id))
 
 
-@router.message(F.text.in_({"📍 Konum yenilə", "Konum yenilə"}))
+@router.message(F.text.in_(MENU_LOC))
 async def ask_loc(message: Message, state: FSMContext) -> None:
     await state.set_state(Reg.loc)
     await state.update_data(only_loc=True)
@@ -587,7 +649,7 @@ async def report_do(cb: CallbackQuery, bot: Bot) -> None:
     await show_next(cb.message, cb.from_user.id)
 
 
-@router.message(F.text.in_({"💬 Matçlar", "Matçlar"}))
+@router.message(F.text.in_(MENU_MATCH))
 async def matches(message: Message) -> None:
     if not await gate(message):
         return
@@ -600,7 +662,7 @@ async def matches(message: Message) -> None:
         await message.answer_photo(row["photo_id"], caption=card_text(row, me), reply_markup=write_kb(row["user_id"], row["username"]))
 
 
-@router.message(F.text.in_({"👀 Məni bəyənənlər", "Məni bəyənənlər"}))
+@router.message(F.text.in_(MENU_LIKES))
 async def who_liked(message: Message) -> None:
     if not await gate(message):
         return
@@ -619,7 +681,7 @@ async def who_liked(message: Message) -> None:
         await message.answer_photo(row["photo_id"], caption=cap, reply_markup=card_kb(row["user_id"]))
 
 
-@router.message(F.text.in_({"💎 Ödəniş", "Ödəniş", "👑 Premium", "Premium", "⭐ Superlike", "Superlike"}))
+@router.message(F.text.in_(MENU_PAY))
 async def pay_menu(message: Message) -> None:
     row = await db.get(message.from_user.id)
     if not row:
@@ -899,7 +961,15 @@ async def unban_cmd(message: Message, bot: Bot) -> None:
     await message.answer("Açıldı.")
 
 
-@router.message(Command("grant"))
+@router.message(F.sticker)
+async def save_sticker(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    key = (message.caption or "hi").strip().lower()
+    if key not in ("hi", "match", "super", "wait"):
+        key = "hi"
+    await db.set_setting(f"sticker:{key}", message.sticker.file_id)
+    await message.answer(f"Stiker yazıldı: {key}. İndi bot bunu göndərəcək.")
 async def grant_cmd(message: Message, bot: Bot) -> None:
     if not is_admin(message.from_user.id):
         return

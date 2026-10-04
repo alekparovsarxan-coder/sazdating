@@ -118,6 +118,11 @@ class DB:
             await db.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES ('min_users', '100')"
             )
+            for col, kind in (("lang", "TEXT"),):
+                try:
+                    await db.execute(f"ALTER TABLE users ADD COLUMN {col} {kind}")
+                except Exception:
+                    pass
             await db.commit()
 
     async def get(self, user_id: int):
@@ -166,7 +171,7 @@ class DB:
         allowed = {
             "name", "age", "city", "bio", "looking", "username", "photo_id",
             "lat", "lon", "hidden", "status", "approved_at", "last_nudge",
-            "like_warn", "prem_warn",
+            "like_warn", "prem_warn", "lang",
         }
         if field not in allowed:
             raise ValueError(field)
