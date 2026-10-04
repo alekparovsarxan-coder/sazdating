@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -23,7 +23,7 @@ from aiogram.types import (
 )
 from dotenv import load_dotenv
 
-from db import DB, haversine
+from db import DB, haversine, today
 from i18n import t
 from texts import (
     APPROVED,
@@ -289,7 +289,9 @@ def main_kb(uid: int, lang: str = "az") -> ReplyKeyboardMarkup:
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    user = await db.get(message.from_user.id)
+    if await db.is_blacklisted(message.from_user.id):
+        await message.answer("Bu hesab qara siyahıdadır. Yenidən qeydiyyat bağlıdır.")
+        return
     arg = ""
     if message.text and " " in message.text:
         arg = message.text.split(maxsplit=1)[1]
@@ -392,7 +394,7 @@ async def reg_loc(message: Message, state: FSMContext) -> None:
 
 @router.message(Reg.loc)
 async def reg_loc_bad(message: Message) -> None:
-    await message.answer("Konum düyməsindən göndər.", reply_markup=loc_kb())
+    await message.answer("Konum düyməsindən göndər.", reply_markup=loc_kb("az"))
 
 
 @router.message(Reg.bio)
@@ -467,7 +469,37 @@ async def reg_photo_bad(message: Message) -> None:
 @router.message(F.text.in_(MENU_FEED))
 async def feed(message: Message) -> None:
     if await gate(message):
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Bu gecə Bakı", callback_data="night:Bakı"),
+             InlineKeyboardButton(text="Bu gecə Gəncə", callback_data="night:Gəncə")],
+        ])
+        await message.answer("Yaxın lent. Cümə axşamı Bakı və Gəncə gecələri ayrıca seçilir.", reply_markup=kb)
         await show_next(message, message.from_user.id)
+
+
+@router.callback_query(F.data.startswith("night:"))
+async def night(cb: CallbackQuery) -> None:
+    city = cb.data.split(":", 1)[1]
+    me = await db.get(cb.from_user.id)
+    if not me or me["status"] != "approved":
+        await cb.answer(NOT_APPROVED, show_alert=True)
+        return
+    row = await db.next_profile(me)
+    found = None
+    # one city pass
+    me_city = dict(me)
+    me_city["city_only"] = 1
+    me_city["city"] = city
+    class R(dict):
+        def __getitem__(self, k):
+            return dict.get(self, k)
+    fake = R(me_city)
+    found = await db.next_profile(fake)
+    if not found:
+        await cb.answer(f"{city} gecəsində yeni anket yoxdur.", show_alert=True)
+        return
+    await cb.answer()
+    await send_card(cb.message, found, me)
 
 
 @router.message(F.text.in_(MENU_PROFILE))
@@ -481,7 +513,9 @@ async def my_profile(message: Message) -> None:
     prem = "Premium 🟡" if db.is_premium(row) else row["status"]
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Bio", callback_data="e:bio"), InlineKeyboardButton(text="Şəkil", callback_data="e:photo")],
-        [InlineKeyboardButton(text="Gizlət/göstər", callback_data="e:hide")],
+        [InlineKeyboardButton(text="1 gün gizlət", callback_data="e:day")],
+        [InlineKeyboardButton(text="Yalnız şəhərim", callback_data="e:cityonly")],
+        [InlineKeyboardButton(text="Dil", callback_data="e:lang")],
         [InlineKeyboardButton(text="Dəvət linki", callback_data="e:ref")],
     ])
     await message.answer_photo(
@@ -498,17 +532,44 @@ async def ref_link(cb: CallbackQuery, bot: Bot) -> None:
     await cb.answer()
 
 
-@router.callback_query(F.data == "e:hide")
-async def hide(cb: CallbackQuery) -> None:
+@router.callback_query(F.data == "e:day")
+async def hide_day(cb: CallbackQuery) -> None:
+    until = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    await db.set_field(cb.from_user.id, "hidden_until", until)
+    await cb.answer("24 saat görünməyəcəksən. Anket silinmədi.", show_alert=True)
+
+
+@router.callback_query(F.data == "e:cityonly")
+async def city_only(cb: CallbackQuery) -> None:
     row = await db.get(cb.from_user.id)
-    await db.set_field(cb.from_user.id, "hidden", 0 if row["hidden"] else 1)
-    await cb.answer("Profil görünürlüğü dəyişdi.", show_alert=True)
+    new = 0 if row["city_only"] else 1
+    await db.set_field(cb.from_user.id, "city_only", new)
+    await cb.answer("Yalnız şəhərin." if new else "Bütün şəhərlər.", show_alert=True)
+
+
+@router.callback_query(F.data == "e:lang")
+async def lang_menu(cb: CallbackQuery) -> None:
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="AZ", callback_data="setlang:az"),
+        InlineKeyboardButton(text="RU", callback_data="setlang:ru"),
+        InlineKeyboardButton(text="EN", callback_data="setlang:en"),
+    ]])
+    await cb.message.answer("Dili seç.", reply_markup=kb)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("setlang:"))
+async def set_lang(cb: CallbackQuery) -> None:
+    lang = cb.data.split(":")[1]
+    await db.set_field(cb.from_user.id, "lang", lang)
+    await cb.message.answer(t(lang, "back").format(name=" ", status=t(lang, "st_ok")), reply_markup=main_kb(cb.from_user.id, lang))
+    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("e:"))
 async def edit_start(cb: CallbackQuery, state: FSMContext) -> None:
     field = cb.data.split(":")[1]
-    if field in ("hide", "ref"):
+    if field in ("hide", "ref", "day", "cityonly", "lang"):
         return
     await state.set_state(Edit.value)
     await state.update_data(field=field)
@@ -543,7 +604,7 @@ async def edit_bio(message: Message, state: FSMContext) -> None:
 async def ask_loc(message: Message, state: FSMContext) -> None:
     await state.set_state(Reg.loc)
     await state.update_data(only_loc=True)
-    await message.answer(ASK_LOC, reply_markup=loc_kb())
+    await message.answer(ASK_LOC, reply_markup=loc_kb("az"))
 
 
 @router.callback_query(F.data.startswith("s:"))
@@ -576,7 +637,9 @@ async def swipe(cb: CallbackQuery, bot: Bot) -> None:
             await cb.answer(SUPER_LIMIT, show_alert=True)
             return
     matched = await db.swipe(cb.from_user.id, to_id, action)
-    await cb.answer("Superlike getdi." if action == "super" else "Oldu.")
+    await cb.answer("Getdi.")
+    if action == "like" and not matched:
+        await cb.message.answer("Bəyəndin. Qarşı tərəf də bəyənsə, yazacam. İndilik adı gizlidir.")
     other = await db.get(to_id)
     if action == "super" and other:
         try:
@@ -596,7 +659,13 @@ async def swipe(cb: CallbackQuery, bot: Bot) -> None:
             name=other["name"], tick=db.tick(other), age=other["age"],
             city=other["city"], dist=dist_text(me, other), bio=other["bio"] or "—",
         )
-        await cb.message.answer(body + "\n\nBuzqıran: Salam, anketin maraqlı gəldi.", reply_markup=write_kb(to_id, other["username"]))
+        ice = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Sakit və xoş gəldi", callback_data=f"ice:0:{to_id}")],
+            [InlineKeyboardButton(text="Çay vaxtın varsa yaz", callback_data=f"ice:1:{to_id}")],
+            [InlineKeyboardButton(text="Yaxınıq, bir salam", callback_data=f"ice:2:{to_id}")],
+            [InlineKeyboardButton(text="Yaz", url=f"https://t.me/{other['username']}" if other["username"] else f"tg://user?id={to_id}")],
+        ])
+        await cb.message.answer(body + "\n\nAd indi açıqdır. İsti cümləni seç, mən ötürərəm.", reply_markup=ice)
         try:
             await bot.send_message(
                 to_id,
@@ -611,7 +680,24 @@ async def swipe(cb: CallbackQuery, bot: Bot) -> None:
     await show_next(cb.message, cb.from_user.id)
 
 
-@router.callback_query(F.data == "undo")
+ICE = [
+    "Salam. Anketin sakit və xoş gəldi.",
+    "Çay içməyə vaxtın varsa, yaz.",
+    "Yaxınlıqdayıq. Bir salam de, görüm.",
+]
+
+
+@router.callback_query(F.data.startswith("ice:"))
+async def ice(cb: CallbackQuery, bot: Bot) -> None:
+    _, idx, uid = cb.data.split(":")
+    text = ICE[int(idx)]
+    me = await db.get(cb.from_user.id)
+    try:
+        await bot.send_message(int(uid), f"{me['name']} yazdı:\n{text}")
+    except Exception:
+        await cb.answer("Çatmadı, profil bağlı ola bilər.", show_alert=True)
+        return
+    await cb.answer("Göndərdim.")
 async def undo(cb: CallbackQuery) -> None:
     row = await db.last_skip(cb.from_user.id)
     if not row:
@@ -640,7 +726,9 @@ async def report_do(cb: CallbackQuery, bot: Bot) -> None:
     await cb.answer("Şikayət düşdü.", show_alert=True)
     await notify_admins(
         bot,
-        f"Şikayət\nHədəf: <code>{uid}</code>\nSəbəb: {reason}\nÜmumi şikayət: {n}\nGöndərən: <code>{cb.from_user.id}</code>",
+        f"Şikayət\nHədəf: <code>{uid}</code>\nSəbəb: {reason}\nÜmumi şikayət: {n}\n"
+        + ("3 şikayət — avtomatik yoxlamaya düşdü.\n" if n >= 3 else "")
+        + f"Göndərən: <code>{cb.from_user.id}</code>",
         kb=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Ban", callback_data=f"adm:ban:{uid}"),
             InlineKeyboardButton(text="Aç", callback_data=f"adm:open:{uid}"),
@@ -716,7 +804,7 @@ async def pre_checkout(q: PreCheckoutQuery) -> None:
 
 
 @router.message(F.successful_payment)
-async def paid(message: Message) -> None:
+async def paid(message: Message, bot: Bot) -> None:
     payload = message.successful_payment.invoice_payload
     kind, uid = payload.split(":")
     uid = int(uid)
@@ -731,6 +819,8 @@ async def paid(message: Message) -> None:
     elif kind == "premium":
         until = await db.grant_premium(uid, PREMIUM_DAYS)
         await message.answer(f"Premium aktivdir, {until}-dək. Adında sarı tik görünəcək.")
+    row = await db.get(uid)
+    await notify_admins(bot, f"Ödəniş: {row['name'] if row else uid} · {kind} · {stars} Stars · id {uid}")
 
 
 @router.message(F.text.in_({"🛠 Admin panel", "Admin", "admin"}))
@@ -745,13 +835,16 @@ async def admin(message: Message) -> None:
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Gözləyənlər", callback_data="adm:list")],
         [InlineKeyboardButton(text="Şikayətlər", callback_data="adm:reps")],
-        [InlineKeyboardButton(text="Hamıya mesaj", callback_data="adm:cast")],
+        [InlineKeyboardButton(text="Hamıya", callback_data="adm:cast:all")],
+        [InlineKeyboardButton(text="Yalnız Bakı", callback_data="adm:cast:baki")],
+        [InlineKeyboardButton(text="Yalnız oğlan", callback_data="adm:cast:oglan")],
+        [InlineKeyboardButton(text="Yalnız qız", callback_data="adm:cast:qiz")],
         [InlineKeyboardButton(text="100-ü təsdiqlə", callback_data="adm:bulk")],
         [InlineKeyboardButton(text=f"Gözləmə rejimi: {wait}", callback_data="adm:wait")],
     ])
     await message.answer(
         f"İstifadəçi: {total}\nGözləyən: {pending}\nTəsdiqli: {approved}\nBan: {banned}\n\n"
-        "Axtarış: /user 123456\nBan: /ban 123\nAç: /unban 123\nPremium: /grant 123",
+        "Axtarış: /user 123456\nBan: /ban 123\nAç: /unban 123\nPremium: /grant 123\nQeyd: /qeyd 123 mətn\nHəftənin anketi: /hefte 123",
         reply_markup=kb,
     )
 
@@ -799,8 +892,10 @@ async def adm_act(cb: CallbackQuery, bot: Bot, state: FSMContext) -> None:
     parts = cb.data.split(":")
     action = parts[1]
     if action == "cast":
+        target = parts[2] if len(parts) > 2 else "all"
         await state.set_state(Cast.text)
-        await cb.message.answer("Hamıya gedəcək mesajı yaz. Ləğv: /cancel")
+        await state.update_data(target=target)
+        await cb.message.answer(f"Mesaj yaz. Hədəf: {target}. Ləğv: /cancel")
         await cb.answer()
         return
     if action == "wait":
@@ -852,11 +947,12 @@ async def adm_act(cb: CallbackQuery, bot: Bot, state: FSMContext) -> None:
         return
     if action == "ban":
         await db.set_status(uid, "banned")
+        await db.blacklist(uid, "admin")
         try:
             await bot.send_message(uid, BANNED)
         except Exception:
             pass
-        await cb.answer("Ban.")
+        await cb.answer("Ban və qara siyahı.")
         return
     if action == "open":
         await db.set_status(uid, "approved")
@@ -884,7 +980,13 @@ async def cast_send(message: Message, state: FSMContext, bot: Bot) -> None:
         await state.clear()
         await message.answer("Ləğv.")
         return
-    ids = await db.approved_ids()
+    target = (await state.get_data()).get("target", "all")
+    if target == "baki":
+        ids = await db.ids_for(city="Bakı")
+    elif target in ("oglan", "qiz"):
+        ids = await db.ids_for(gender=target)
+    else:
+        ids = await db.approved_ids()
     ok = 0
     for uid in ids:
         try:
@@ -917,7 +1019,7 @@ async def user_info(message: Message) -> None:
         f"{row['city']} · {row['status']}\n"
         f"Şikayət {row['complaints']} · like {row['likes_sent']}/{row['likes_recv']} · super {row['super_sent']}/{row['super_recv']}\n"
         f"Baxış {row['views']} · premium {row['premium_until']}\n"
-        f"Ödəniş: {pay_s}"
+        f"Ödəniş: {pay_s}\nAdmin qeydi: {row['admin_note'] or '—'}"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="Ban", callback_data=f"adm:ban:{row['user_id']}"),
@@ -938,11 +1040,12 @@ async def ban_cmd(message: Message, bot: Bot) -> None:
         return
     uid = int(parts[1])
     await db.set_status(uid, "banned")
+    await db.blacklist(uid, "admin")
     try:
         await bot.send_message(uid, BANNED)
     except Exception:
         pass
-    await message.answer("Ban olundu.")
+    await message.answer("Ban olundu və qara siyahıya düşdü.")
 
 
 @router.message(Command("unban"))
@@ -970,6 +1073,9 @@ async def save_sticker(message: Message) -> None:
         key = "hi"
     await db.set_setting(f"sticker:{key}", message.sticker.file_id)
     await message.answer(f"Stiker yazıldı: {key}. İndi bot bunu göndərəcək.")
+
+
+@router.message(Command("grant"))
 async def grant_cmd(message: Message, bot: Bot) -> None:
     if not is_admin(message.from_user.id):
         return
@@ -984,11 +1090,46 @@ async def grant_cmd(message: Message, bot: Bot) -> None:
     await message.answer(until)
 
 
+@router.message(Command("qeyd"))
+async def note_cmd(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3 or not parts[1].isdigit():
+        await message.answer("/qeyd 123 şübhəli şəkil")
+        return
+    await db.set_field(int(parts[1]), "admin_note", parts[2])
+    await message.answer("Qeyd yazıldı. Müştəri görmür.")
+
+
+@router.message(Command("hefte"))
+async def week_cmd(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("/hefte 123456")
+        return
+    await db.set_setting("featured", parts[1])
+    await message.answer("Həftənin anketi lentin başına qoyuldu.")
+
+
 async def jobs(bot: Bot) -> None:
     while True:
         try:
             hour = datetime.now(timezone.utc).hour
-            if hour == 14:  # 18:00 Bakı
+            if hour == 16 and await db.setting("night_ping", "") != today():
+                await db.set_setting("night_ping", today())
+                for uid in await db.approved_ids():
+                    try:
+                        await bot.send_message(uid, "Axşam lentidir, 20:00–23:00. Yaxınlığa bir bax. 💛")
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.04)
+            if hour == 17 and await db.setting("summary_day", "") != today():
+                await db.set_setting("summary_day", today())
+                new, approved, reports, pay_n, stars = await db.day_stats()
+                await notify_admins(bot, f"Günlük xülasə\nYeni: {new}\nTəsdiq: {approved}\nŞikayət: {reports}\nÖdəniş: {pay_n} · {stars} Stars")
                 for row in await db.nudge_candidates():
                     text = NUDGES[row["user_id"] % len(NUDGES)]
                     try:

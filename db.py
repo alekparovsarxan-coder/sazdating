@@ -79,11 +79,10 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
-CREATE TABLE IF NOT EXISTS broadcasts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    text TEXT,
-    created_at TEXT,
-    sent INTEGER
+CREATE TABLE IF NOT EXISTS blacklist (
+    user_id INTEGER PRIMARY KEY,
+    reason TEXT,
+    created_at TEXT
 );
 """
 
@@ -118,7 +117,7 @@ class DB:
             await db.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES ('min_users', '100')"
             )
-            for col, kind in (("lang", "TEXT"),):
+            for col, kind in (("lang", "TEXT"), ("city_only", "INTEGER"), ("hidden_until", "TEXT"), ("admin_note", "TEXT")):
                 try:
                     await db.execute(f"ALTER TABLE users ADD COLUMN {col} {kind}")
                 except Exception:
@@ -171,7 +170,7 @@ class DB:
         allowed = {
             "name", "age", "city", "bio", "looking", "username", "photo_id",
             "lat", "lon", "hidden", "status", "approved_at", "last_nudge",
-            "like_warn", "prem_warn", "lang",
+            "like_warn", "prem_warn", "lang", "city_only", "hidden_until", "admin_note",
         }
         if field not in allowed:
             raise ValueError(field)
@@ -299,10 +298,19 @@ class DB:
             if me["looking"] and me["looking"] != "hami":
                 q += " AND gender=?"
                 args.append(me["looking"])
+            if me["city_only"]:
+                q += " AND city=?"
+                args.append(me["city"])
             cur = await db.execute(q, args)
             rows = await cur.fetchall()
+        now_iso = now()
+        rows = [r for r in rows if not r["hidden_until"] or r["hidden_until"] < now_iso]
         if not rows:
             return None
+        featured = await self.setting("featured", "")
+        for r in rows:
+            if featured and str(r["user_id"]) == featured:
+                return r
 
         def score(r):
             dist = 9999.0
@@ -416,6 +424,8 @@ class DB:
             )
             cur = await db.execute("SELECT complaints FROM users WHERE user_id=?", (to_id,))
             n = (await cur.fetchone())[0]
+            if n >= 3:
+                await db.execute("UPDATE users SET status='pending' WHERE user_id=?", (to_id,))
             await db.commit()
             return n
 
@@ -492,6 +502,41 @@ class DB:
                 "SELECT * FROM users WHERE is_premium=1 AND premium_until IS NOT NULL AND status='approved'"
             )
             return await cur.fetchall()
+
+    async def blacklist(self, user_id: int, reason: str = "ban") -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO blacklist (user_id, reason, created_at) VALUES (?,?,?)",
+                (user_id, reason, now()),
+            )
+            await db.commit()
+
+    async def is_blacklisted(self, user_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT 1 FROM blacklist WHERE user_id=?", (user_id,))
+            return bool(await cur.fetchone())
+
+    async def ids_for(self, city: str | None = None, gender: str | None = None):
+        q = "SELECT user_id FROM users WHERE status='approved'"
+        args = []
+        if city:
+            q += " AND city=?"
+            args.append(city)
+        if gender:
+            q += " AND gender=?"
+            args.append(gender)
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(q, args)
+            return [r[0] for r in await cur.fetchall()]
+
+    async def day_stats(self):
+        day = today()
+        async with aiosqlite.connect(self.path) as db:
+            new = (await (await db.execute("SELECT COUNT(*) FROM users WHERE created_at LIKE ?", (day + "%",))).fetchone())[0]
+            approved = (await (await db.execute("SELECT COUNT(*) FROM users WHERE approved_at LIKE ?", (day + "%",))).fetchone())[0]
+            reports = (await (await db.execute("SELECT COUNT(*) FROM reports WHERE created_at LIKE ?", (day + "%",))).fetchone())[0]
+            pays = (await (await db.execute("SELECT COUNT(*), COALESCE(SUM(stars),0) FROM payments WHERE created_at LIKE ?", (day + "%",))).fetchone())
+            return new, approved, reports, pays[0], pays[1]
 
     async def payments_of(self, user_id: int):
         async with aiosqlite.connect(self.path) as db:
