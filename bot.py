@@ -436,6 +436,7 @@ async def reg_looking(cb: CallbackQuery, state: FSMContext) -> None:
 @router.message(Reg.name)
 async def reg_name(message: Message, state: FSMContext) -> None:
     name = (message.text or "").strip()
+    lang = (await state.get_data()).get("lang") or "az"
     if name.lower() in BANNED_NICKS:
         await message.answer(t(lang, "nick"))
         return
@@ -447,18 +448,22 @@ async def reg_name(message: Message, state: FSMContext) -> None:
 
 @router.message(Reg.age)
 async def reg_age(message: Message, state: FSMContext) -> None:
-    age = parse_age(message.text or "")
-    if not age:
+    lang = (await state.get_data()).get("lang") or "az"
+    try:
+        age = parse_age(message.text or "")
+        if not age:
+            await message.answer(t(lang, "agebad"))
+            return
+        await state.update_data(age=age)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=f"✓ {age}", callback_data="ageok"),
+            InlineKeyboardButton(text="↻", callback_data="ageno"),
+        ]])
+        await message.answer(t(lang, "ageok").format(age=age), reply_markup=kb)
+        await state.set_state(Reg.phone)
+    except Exception:
+        logging.exception("age failed")
         await message.answer(t(lang, "agebad"))
-        return
-    await state.update_data(age=age)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=f"Bəli, {age}", callback_data="ageok"),
-        InlineKeyboardButton(text="Yenidən", callback_data="ageno"),
-    ]])
-    note = " 18 yaş əlavə yoxlamaya düşəcək." if age == 18 else ""
-    await message.answer(t(lang, "ageok").format(age=age), reply_markup=kb)
-    await state.set_state(Reg.phone)
 
 
 @router.callback_query(F.data == "ageok")
