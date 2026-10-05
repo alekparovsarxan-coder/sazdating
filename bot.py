@@ -448,22 +448,29 @@ async def reg_name(message: Message, state: FSMContext) -> None:
 
 @router.message(Reg.age)
 async def reg_age(message: Message, state: FSMContext) -> None:
-    lang = (await state.get_data()).get("lang") or "az"
-    try:
-        age = parse_age(message.text or "")
-        if not age:
-            await message.answer(t(lang, "agebad"))
-            return
-        await state.update_data(age=age)
-        kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=f"✓ {age}", callback_data="ageok"),
-            InlineKeyboardButton(text="↻", callback_data="ageno"),
-        ]])
-        await message.answer(t(lang, "ageok").format(age=age), reply_markup=kb)
-        await state.set_state(Reg.phone)
-    except Exception:
-        logging.exception("age failed")
-        await message.answer(t(lang, "agebad"))
+    await accept_age(message, state)
+
+
+@router.message(F.text.regexp(r"^\s*\d{1,4}\s*$"))
+async def age_anywhere(message: Message, state: FSMContext) -> None:
+    user = await db.get(message.from_user.id)
+    if user and user["photo_id"] and user["status"] != "rejected":
+        return
+    await accept_age(message, state)
+
+
+async def accept_age(message: Message, state: FSMContext) -> None:
+    age = parse_age(message.text or "")
+    if not age:
+        await message.answer("18–70 arası rəqəm yaz. Məsələn: 23")
+        return
+    await state.update_data(age=age)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=f"✓ {age}", callback_data="ageok"),
+        InlineKeyboardButton(text="Yenidən", callback_data="ageno"),
+    ]])
+    await message.answer(f"{age} qəbul olundu. Düzgündür?", reply_markup=kb)
+    await state.set_state(Reg.phone)
 
 
 @router.callback_query(F.data == "ageok")
@@ -542,51 +549,50 @@ async def reg_bio(message: Message, state: FSMContext) -> None:
 
 
 @router.message(Reg.photo, F.photo)
+@router.message(F.photo)
 async def reg_photo(message: Message, state: FSMContext, bot: Bot) -> None:
-    photo = message.photo[-1]
-    if photo.file_size and photo.file_size < 25000:
-        await message.answer("Şəkil çox kiçikdir, üz görünmür. Daha aydın şəkil göndər.")
-        return
     data = await state.get_data()
-    payload = {
-        "user_id": message.from_user.id,
-        "username": message.from_user.username,
-        "name": data["name"],
-        "age": data["age"],
-        "gender": data["gender"],
-        "looking": data["looking"],
-        "city": data["city"],
-        "bio": data.get("bio") or "",
-        "photo_id": photo.file_id,
-        "lat": data["lat"],
-        "lon": data["lon"],
-        "referrer": data.get("referrer"),
-    }
-    if photo.file_unique_id:
-        dup = await db.same_photo(photo.file_unique_id, message.from_user.id)
-        if dup:
-            await notify_admins(bot, f"Eyni şəkil. Yeni {message.from_user.id}, əvvəlki {dup['user_id']} status {dup['status']}.")
-            if dup["status"] == "rejected":
-                await notify_admins(bot, "Bu şəkil əvvəl rədd olunub.")
-    await db.save_profile(payload)
-    await db.set_field(message.from_user.id, "lang", data.get("lang") or "az")
-    if data.get("phone"):
-        await db.set_field(message.from_user.id, "phone", data["phone"])
-    if photo.file_unique_id:
-        await db.set_field(message.from_user.id, "photo_uid", photo.file_unique_id)
-    if payload["referrer"]:
-        ref = await db.get(payload["referrer"])
-        if ref:
-            await db.add_extra_likes(payload["referrer"], 5)
-    await state.clear()
-    total, _, _, _ = await db.counts()
-    await message.answer(t(lang, "done"), reply_markup=main_kb(message.from_user.id, lang))
-    row = await db.get(message.from_user.id)
+    lang = data.get("lang") or "az"
     try:
+        user = await db.get(message.from_user.id)
+        if user and user["photo_id"] and user["status"] != "rejected" and not data.get("name"):
+            await message.answer("Anketin artıq var. /start")
+            return
+        photo = message.photo[-1]
+        if photo.file_size and photo.file_size < 15000:
+            await message.answer("Şəkil çox kiçikdir. Daha aydınını göndər.")
+            return
+        if not data.get("name") or not data.get("age") or not data.get("city"):
+            await message.answer("Qeydiyyat yarıda qırılıb. /start yaz, şəkil addımına qədər yenidən gəl.")
+            return
+        payload = {
+            "user_id": message.from_user.id,
+            "username": message.from_user.username,
+            "name": data["name"],
+            "age": data["age"],
+            "gender": data.get("gender") or "hami",
+            "looking": data.get("looking") or "hami",
+            "city": data["city"],
+            "bio": data.get("bio") or "",
+            "photo_id": photo.file_id,
+            "lat": data.get("lat"),
+            "lon": data.get("lon"),
+            "referrer": data.get("referrer"),
+        }
+        await db.save_profile(payload)
+        await db.set_field(message.from_user.id, "lang", lang)
+        if data.get("phone"):
+            await db.set_field(message.from_user.id, "phone", data["phone"])
+        if photo.file_unique_id:
+            await db.set_field(message.from_user.id, "photo_uid", photo.file_unique_id)
+        await state.clear()
+        await message.answer("Anketin düşdü. Admin təsdiqləyəndə lent açılacaq.", reply_markup=main_kb(message.from_user.id, lang))
+        row = await db.get(message.from_user.id)
         await send_review(bot, row)
-        await bot.send_message(OWNER_ID, f"Yeni anket tamamlandı: {row['name']}, {row['age']}, {row['city']}, id {row['user_id']}")
+        await bot.send_message(OWNER_ID, f"Yeni anket: {row['name']}, {row['age']}, {row['city']}, {row['phone'] or '—'}, id {row['user_id']}")
     except Exception:
-        logging.exception("review send failed")
+        logging.exception("photo failed")
+        await message.answer("Şəkil düşmədi. Bir daha göndər, açılacaq.")
 
 
 @router.message(Reg.photo)
@@ -1496,7 +1502,13 @@ async def recover_age(message: Message, state: FSMContext) -> None:
 
 @router.errors()
 async def on_error(event) -> bool:
-    logging.exception("update error: %s", event.exception)
+    logging.exception("update error")
+    try:
+        msg = event.update.message if getattr(event, "update", None) else None
+        if msg:
+            await msg.answer("Bir xəta oldu. Eyni şeyi bir daha göndər.")
+    except Exception:
+        pass
     return True
 
 
@@ -1506,21 +1518,19 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     await db.init()
     await db.set_setting("wait_mode", "0")
-    await db.set_status(OWNER_ID, "approved")
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
     dp.include_router(router)
     asyncio.create_task(jobs(bot))
-    try:
-        await bot.send_message(OWNER_ID, "Bot işləyir. Gözləyənləri indi göndərirəm. Sən növbədə deyilsən.")
-        pending = await db.pending(200)
-        pending = [r for r in pending if r["user_id"] != OWNER_ID]
-        await bot.send_message(OWNER_ID, f"Köhnə gözləyənlər: {len(pending)}")
-        for row in pending:
-            await send_review(bot, row)
-            await asyncio.sleep(0.3)
-    except Exception:
-        logging.exception("startup ping failed")
+
+    async def later():
+        await asyncio.sleep(3)
+        try:
+            await bot.send_message(OWNER_ID, "Bot işləyir. Yaş addımı açıqdır.")
+        except Exception:
+            logging.exception("startup ping failed")
+
+    asyncio.create_task(later())
     await dp.start_polling(bot)
 
 
