@@ -58,7 +58,7 @@ OWNER_ID = 8753136288
 ADMIN_IDS = {OWNER_ID}
 extra = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
 ADMIN_IDS |= extra
-DB_PATH = os.getenv("DB_PATH", "sazdating.db")
+DB_PATH = os.getenv("DB_PATH") or ("/data/sazdating.db" if os.path.isdir("/data") else "sazdating.db")
 FREE_LIKES = 30
 PACKS = {
     "likes": ("30 bəyənmə", 35, "3.50 AZN"),
@@ -603,11 +603,6 @@ async def reg_photo_bad(message: Message) -> None:
 @router.message(F.text.in_(MENU_FEED))
 async def feed(message: Message) -> None:
     if await gate(message):
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Bu gecə Bakı", callback_data="night:Bakı"),
-             InlineKeyboardButton(text="Bu gecə Gəncə", callback_data="night:Gəncə")],
-        ])
-        await message.answer("Yaxın lent. Cümə axşamı Bakı və Gəncə gecələri ayrıca seçilir.", reply_markup=kb)
         await show_next(message, message.from_user.id)
 
 
@@ -786,46 +781,32 @@ async def swipe(cb: CallbackQuery, bot: Bot) -> None:
             await cb.answer(SUPER_LIMIT, show_alert=True)
             return
     matched = await db.swipe(cb.from_user.id, to_id, action)
-    await cb.answer("Getdi.")
-    if action == "like" and not matched:
-        await cb.message.answer("Bəyəndin. Qarşı tərəf də bəyənsə, yazacam. İndilik adı gizlidir.")
     other = await db.get(to_id)
-    if action == "super" and other:
+    if action == "skip":
+        await cb.answer("Keç")
+        await show_next(cb.message, cb.from_user.id)
+        return
+    if action == "like" and other and not matched:
+        await cb.answer("❤️")
         try:
-            await bot.send_photo(
-                to_id,
-                me["photo_id"],
-                caption=SUPER_IN.format(
-                    name=me["name"], tick=db.tick(me), age=me["age"],
-                    city=me["city"], dist=dist_text(other, me), bio=me["bio"] or "—",
-                ),
-                reply_markup=card_kb(me["user_id"]),
-            )
+            await bot.send_message(to_id, f"❤️ {me['name']} səni bəyəndi.")
+            await bot.send_photo(to_id, me["photo_id"], caption=card_text(me, other), reply_markup=card_kb(me["user_id"]))
         except Exception:
-            logging.exception("super notify")
+            logging.exception("like notify")
+        await show_next(cb.message, cb.from_user.id)
+        return
     if matched and other:
-        body = MATCH.format(
-            name=other["name"], tick=db.tick(other), age=other["age"],
-            city=other["city"], dist=dist_text(me, other), bio=other["bio"] or "—",
-        )
-        ice = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Sakit və xoş gəldi", callback_data=f"ice:0:{to_id}")],
-            [InlineKeyboardButton(text="Çay vaxtın varsa yaz", callback_data=f"ice:1:{to_id}")],
-            [InlineKeyboardButton(text="Yaxınıq, bir salam", callback_data=f"ice:2:{to_id}")],
-            [InlineKeyboardButton(text="Hələ burdasan?", callback_data=f"ping:{row['user_id']}")],
-        ])
-        await cb.message.answer(body + "\n\nAd indi açıqdır. İsti cümləni seç, mən ötürərəm.", reply_markup=ice)
+        await cb.answer("Match")
+        mine = f"https://t.me/{cb.from_user.username}" if cb.from_user.username else f"tg://user?id={cb.from_user.id}"
+        theirs = f"https://t.me/{other['username']}" if other["username"] else f"tg://user?id={to_id}"
+        await cb.message.answer(f"❤️ Qarşılıqlı bəyənmə.\n{other['name']}: {theirs}")
         try:
-            await bot.send_message(
-                to_id,
-                MATCH.format(
-                    name=me["name"], tick=db.tick(me), age=me["age"],
-                    city=me["city"], dist=dist_text(other, me), bio=me["bio"] or "—",
-                ),
-                reply_markup=write_kb(cb.from_user.id, cb.from_user.username),
-            )
+            await bot.send_message(to_id, f"❤️ Qarşılıqlı bəyənmə.\n{me['name']}: {mine}")
         except Exception:
             logging.exception("match notify")
+        await show_next(cb.message, cb.from_user.id)
+        return
+    await cb.answer("Getdi.")
     await show_next(cb.message, cb.from_user.id)
 
 
