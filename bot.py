@@ -58,7 +58,10 @@ OWNER_ID = 8753136288
 ADMIN_IDS = {OWNER_ID}
 extra = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
 ADMIN_IDS |= extra
-DB_PATH = os.getenv("DB_PATH") or ("/data/sazdating.db" if os.path.isdir("/data") else "sazdating.db")
+if os.path.isdir("/data"):
+    DB_PATH = "/data/sazdating.db"
+else:
+    DB_PATH = os.getenv("DB_PATH", "sazdating.db")
 FREE_LIKES = 30
 PACKS = {
     "likes": ("30 bəyənmə", 35, "3.50 AZN"),
@@ -1505,7 +1508,8 @@ async def main() -> None:
     async def later():
         await asyncio.sleep(3)
         try:
-            await bot.send_message(OWNER_ID, "Bot işləyir. Yaş addımı açıqdır.")
+            total, pending, approved, banned = await db.counts()
+            await bot.send_message(OWNER_ID, f"Bot işləyir.\nBaza: {DB_PATH}\nAdam: {total}, gözləyən {pending}, açıq {approved}")
         except Exception:
             logging.exception("startup ping failed")
 
