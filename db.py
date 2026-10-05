@@ -217,6 +217,20 @@ class DB:
             )
             await db.commit()
 
+    async def gifted(self, user_id: int) -> bool:
+        return await self.setting(f"gift:{user_id}", "") == "1"
+
+    async def gift_once(self, user_id: int, phone: str | None) -> bool:
+        if await self.gifted(user_id):
+            return False
+        if phone and await self.setting(f"giftphone:{phone}", "") == "1":
+            return False
+        await self.add_coins(user_id, 35)
+        await self.set_setting(f"gift:{user_id}", "1")
+        if phone:
+            await self.set_setting(f"giftphone:{phone}", "1")
+        return True
+
     async def add_coins(self, user_id: int, n: int) -> int:
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
@@ -242,6 +256,8 @@ class DB:
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT * FROM users WHERE phone LIKE ?", (f"%{digits[-9:]}%",))
             return await cur.fetchone()
+
+    async def add_super(self, user_id: int, n: int) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
                 "UPDATE users SET super_credits=super_credits+? WHERE user_id=?", (n, user_id)

@@ -78,7 +78,7 @@ MENU_MATCH = {"💬 Matçlar", "Matçlar", "💬 Мэтчи", "💬 Matches"}
 MENU_LIKES = {"👀 Məni bəyənənlər", "Məni bəyənənlər", "👀 Bəyənmələr", "👀 Лайки", "👀 Likes"}
 MENU_PAY = {"💎 Ödəniş", "Ödəniş", "👑 Premium", "Premium", "⭐ Superlike", "Superlike", "💎 Оплата", "👑 Премиум", "⭐ Суперлайк", "💎 Pay", "👑 Premium", "⭐ Superlike"}
 MENU_LOC = {"📍 Konum yenilə", "Konum yenilə", "📍 Konum", "📍 Гео", "📍 Location"}
-REASONS = ["Saxta şəkil", "18-dən aşağı", "Təhqir", "Spam", "Digər"]
+REASONS = ["Saxta şəkil", "18-dən aşağı", "Təhqir", "Spam", "Pul istəyir", "Digər"]
 CITIES = ["Bakı", "Nəsimi", "Yasamal", "Xətai", "Nərimanov", "Gəncə", "Sumqayıt", "Mingəçevir", "Şəki", "Lənkəran", "Naxçıvan", "Qəbələ", "Digər"]
 BANNED_NICKS = {"king", "baby", "qaqa", "boss", "sexy", "vip", "admin"}
 REJECT_REASONS = ["Şəkil sənin deyil", "Üz görünmür", "18 şübhəlidir", "Nömrə uyğun deyil"]
@@ -170,10 +170,8 @@ def card_kb(uid: int) -> InlineKeyboardMarkup:
 
 def pay_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="30 bəyənmə · 35 SazCoin", callback_data="coin:likes")],
-        [InlineKeyboardButton(text="1 Superlike · 10 SazCoin", callback_data="coin:super")],
-        [InlineKeyboardButton(text="Premium 7 gün · 340 SazCoin", callback_data="coin:premium")],
-        [InlineKeyboardButton(text="Balans artır", callback_data="coin:topup")],
+        [InlineKeyboardButton(text="⭐ Telegram Stars", callback_data="payway:stars")],
+        [InlineKeyboardButton(text="💳 Bank kartı · SazCoin", callback_data="payway:card")],
     ])
 
 
@@ -942,7 +940,28 @@ async def pay_menu(message: Message) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("coin:"))
+@router.callback_query(F.data.startswith("payway:"))
+async def payway(cb: CallbackQuery) -> None:
+    way = cb.data.split(":")[1]
+    if way == "stars":
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="+30 bəyənmə · 100 Stars", callback_data="buy:likes")],
+            [InlineKeyboardButton(text="1 Superlike · 25 Stars", callback_data="buy:super")],
+            [InlineKeyboardButton(text="Premium 7 gün · 1000 Stars", callback_data="buy:premium")],
+        ])
+        await cb.message.answer("⭐ Stars ilə ödə.", reply_markup=kb)
+    else:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="30 bəyənmə · 35 SazCoin", callback_data="coin:likes")],
+            [InlineKeyboardButton(text="1 Superlike · 10 SazCoin", callback_data="coin:super")],
+            [InlineKeyboardButton(text="Premium 7 gün · 340 SazCoin", callback_data="coin:premium")],
+            [InlineKeyboardButton(text="💳 Balans artır", callback_data="coin:topup")],
+            [InlineKeyboardButton(text="35 coin", callback_data="coin:amt:35"), InlineKeyboardButton(text="100 coin", callback_data="coin:amt:100")],
+        ])
+        row = await db.get(cb.from_user.id)
+        bal = row["coins"] if row and row["coins"] else 0
+        await cb.message.answer(f"💳 Kart ilə SazCoin.\nBalansın: {bal} 🪙", reply_markup=kb)
+    await cb.answer()
 async def coin_buy(cb: CallbackQuery, bot: Bot) -> None:
     kind = cb.data.split(":")[1]
     row = await db.get(cb.from_user.id)
@@ -962,6 +981,13 @@ async def coin_buy(cb: CallbackQuery, bot: Bot) -> None:
             ]]),
         )
         await notify_admins(bot, "Balans sorğusu\n" + text)
+        await cb.answer()
+        return
+    if kind.startswith("amt:"):
+        amount = kind.split(":")[1]
+        text = f"Salam, {amount} SazCoin almaq istəyirəm. Nömrə: {row['phone'] or '—'} ID: {cb.from_user.id}"
+        await cb.message.answer("Hazır mesaj:\n" + text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Adminə yaz", url=f"tg://user?id={OWNER_ID}")]]))
+        await notify_admins(bot, text)
         await cb.answer()
         return
     title, price, manat = PACKS[kind]
@@ -1165,8 +1191,12 @@ async def adm_act(cb: CallbackQuery, bot: Bot, state: FSMContext) -> None:
             await cb.answer(f"Gözləmə rejimi açıqdır: {total}/{min_users}. Əvvəl Admin-dən söndür.", show_alert=True)
             return
         await db.set_status(uid, "approved")
+        gift = ""
+        row = await db.get(uid)
+        if row and await db.gift_once(uid, row["phone"]):
+            gift = "\n\n🎁 Sənə 35 SazCoin hədiyyə olundu. Bu 3.50 manatdır, ilk anketin üçün."
         try:
-            await bot.send_message(uid, APPROVED, reply_markup=main_kb(uid))
+            await bot.send_message(uid, APPROVED + gift, reply_markup=main_kb(uid))
         except Exception:
             pass
         await cb.answer("Təsdiqləndi.")
