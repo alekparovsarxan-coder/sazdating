@@ -367,11 +367,9 @@ def main_kb(uid: int, lang: str = "az") -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def phone_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📱 Nömrəmi göndər", request_contact=True)]],
-        resize_keyboard=True,
-    )
+def phone_kb(lang: str = "az") -> ReplyKeyboardMarkup:
+    label = {"ru": "📱 Отправить номер", "en": "📱 Send my number"}.get(lang, "📱 Nömrəmi göndər")
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=label, request_contact=True)]], resize_keyboard=True)
 
 
 @router.message(CommandStart())
@@ -439,7 +437,7 @@ async def reg_looking(cb: CallbackQuery, state: FSMContext) -> None:
 async def reg_name(message: Message, state: FSMContext) -> None:
     name = (message.text or "").strip()
     if name.lower() in BANNED_NICKS:
-        await message.answer("Ləqəb olmaz. Öz adını yaz.")
+        await message.answer(t(lang, "nick"))
         return
     lang = (await state.get_data()).get("lang") or "az"
     await state.update_data(name=name)
@@ -451,7 +449,7 @@ async def reg_name(message: Message, state: FSMContext) -> None:
 async def reg_age(message: Message, state: FSMContext) -> None:
     age = parse_age(message.text or "")
     if not age:
-        await message.answer("Yaşı rəqəmlə yaz, məsələn 23. Doğum ili də olar: 2002. 18-dən aşağı olmaz.")
+        await message.answer(t(lang, "agebad"))
         return
     await state.update_data(age=age)
     kb = InlineKeyboardMarkup(inline_keyboard=[[
@@ -459,13 +457,14 @@ async def reg_age(message: Message, state: FSMContext) -> None:
         InlineKeyboardButton(text="Yenidən", callback_data="ageno"),
     ]])
     note = " 18 yaş əlavə yoxlamaya düşəcək." if age == 18 else ""
-    await message.answer(f"{age} yaş, düzdür?{note}", reply_markup=kb)
+    await message.answer(t(lang, "ageok").format(age=age), reply_markup=kb)
     await state.set_state(Reg.phone)
 
 
 @router.callback_query(F.data == "ageok")
 async def age_ok(cb: CallbackQuery, state: FSMContext) -> None:
-    await cb.message.answer("Təhlükəsizlik üçün nömrəni düymədən göndər. Nömrə yalnız mənə görünür.", reply_markup=phone_kb())
+    lang = (await state.get_data()).get("lang") or "az"
+    await cb.message.answer(t(lang, "phone"), reply_markup=phone_kb(lang))
     await state.set_state(Reg.phone)
     await cb.answer()
 
@@ -576,9 +575,13 @@ async def reg_photo(message: Message, state: FSMContext, bot: Bot) -> None:
             await db.add_extra_likes(payload["referrer"], 5)
     await state.clear()
     total, _, _, _ = await db.counts()
-    await message.answer("Anketin düşdü. Admin təsdiqləyəndə lent açılacaq.", reply_markup=main_kb(message.from_user.id))
+    await message.answer(t(lang, "done"), reply_markup=main_kb(message.from_user.id, lang))
     row = await db.get(message.from_user.id)
-    await send_review(bot, row)
+    try:
+        await send_review(bot, row)
+        await bot.send_message(OWNER_ID, f"Yeni anket tamamlandı: {row['name']}, {row['age']}, {row['city']}, id {row['user_id']}")
+    except Exception:
+        logging.exception("review send failed")
 
 
 @router.message(Reg.photo)
@@ -1183,7 +1186,7 @@ async def adm_act(cb: CallbackQuery, bot: Bot, state: FSMContext) -> None:
         gift = ""
         row = await db.get(uid)
         if row and await db.gift_once(uid, row["phone"]):
-            gift = "\n\n🎁 Sənə 35 SazCoin hədiyyə olundu. Bu 3.50 manatdır, ilk anketin üçün."
+            gift = "\n\n" + t(row["lang"] or "az", "gift")
         try:
             await bot.send_message(uid, APPROVED + gift, reply_markup=main_kb(uid))
         except Exception:
