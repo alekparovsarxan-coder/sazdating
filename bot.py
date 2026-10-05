@@ -1509,7 +1509,7 @@ async def main() -> None:
         await asyncio.sleep(3)
         try:
             total, pending, approved, banned = await db.counts()
-            await bot.send_message(OWNER_ID, f"Bot işləyir.\nBaza: {DB_PATH}\nAdam: {total}, gözləyən {pending}, açıq {approved}")
+            await bot.send_message(OWNER_ID, f"Bot işləyir. Yoxlama 2.\nBaza: {DB_PATH}\nAdam: {total}, gözləyən {pending}, açıq {approved}")
         except Exception:
             logging.exception("startup ping failed")
 
