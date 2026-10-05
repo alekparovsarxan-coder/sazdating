@@ -917,14 +917,12 @@ async def who_liked(message: Message) -> None:
     if not await gate(message):
         return
     me = await db.get(message.from_user.id)
-    if not db.is_premium(me):
-        await message.answer("Səni bəyənənlər Premium üçündür.", reply_markup=pay_kb())
-        return
     rows = await db.likes_received(message.from_user.id)
     if not rows:
-        await message.answer("Hələ bəyənmə yoxdur.")
+        await message.answer("Səni bəyənən yoxdur.")
         return
-    for row in rows[:10]:
+    await message.answer(f"Səni {min(len(rows), 30)} nəfər bəyənib.")
+    for row in rows[:30]:
         cap = card_text(row, me)
         if row["action"] == "super":
             cap = "<b>SUPERLIKE</b>\n" + cap
