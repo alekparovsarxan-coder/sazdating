@@ -112,7 +112,7 @@ class DB:
         async with aiosqlite.connect(self.path) as db:
             await db.executescript(SCHEMA)
             await db.execute(
-                "INSERT OR IGNORE INTO settings (key, value) VALUES ('wait_mode', '1')"
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('wait_mode', '0')"
             )
             await db.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES ('min_users', '100')"

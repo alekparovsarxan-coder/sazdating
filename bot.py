@@ -209,8 +209,7 @@ async def gate(message: Message) -> bool:
         return False
     if row["status"] != "approved":
         total, _, _, _ = await db.counts()
-        min_users = await db.setting("min_users", "100")
-        await message.answer(NOT_APPROVED + "\n" + PENDING.format(min=min_users, total=total))
+        await message.answer("Hesabın hələ təsdiqlənməyib. Admin baxan kimi lent açılacaq.")
         return False
     return True
 
@@ -287,14 +286,6 @@ async def send_review(bot: Bot, row) -> None:
             await bot.send_location(OWNER_ID, row["lat"], row["lon"])
         except Exception:
             logging.exception("review location failed")
-    for aid in ADMIN_IDS:
-        try:
-            if photo:
-                await bot.send_photo(aid, photo, caption=text, reply_markup=kb)
-            else:
-                await bot.send_message(aid, text, reply_markup=kb)
-        except Exception:
-            logging.exception("admin notify failed")
 
 
 async def vibe(message: Message, key: str) -> None:
@@ -585,8 +576,7 @@ async def reg_photo(message: Message, state: FSMContext, bot: Bot) -> None:
             await db.add_extra_likes(payload["referrer"], 5)
     await state.clear()
     total, _, _, _ = await db.counts()
-    min_users = await db.setting("min_users", "100")
-    await message.answer(PENDING.format(min=min_users, total=total) + f"\nNövbədə: {total}.", reply_markup=main_kb(message.from_user.id))
+    await message.answer("Anketin düşdü. Admin təsdiqləyəndə lent açılacaq.", reply_markup=main_kb(message.from_user.id))
     row = await db.get(message.from_user.id)
     await send_review(bot, row)
 
@@ -962,8 +952,11 @@ async def payway(cb: CallbackQuery) -> None:
         bal = row["coins"] if row and row["coins"] else 0
         await cb.message.answer(f"💳 Kart ilə SazCoin.\nBalansın: {bal} 🪙", reply_markup=kb)
     await cb.answer()
+
+
+@router.callback_query(F.data.startswith("coin:"))
 async def coin_buy(cb: CallbackQuery, bot: Bot) -> None:
-    kind = cb.data.split(":")[1]
+    kind = cb.data.split(":", 1)[1]
     row = await db.get(cb.from_user.id)
     if not row:
         await cb.answer("Əvvəl anketi bitir.", show_alert=True)
@@ -1039,6 +1032,9 @@ async def coin_cmd(message: Message, bot: Bot) -> None:
     except Exception:
         pass
     await message.answer(f"{user['name']} · {user['phone']} · balans {bal}")
+
+
+@router.callback_query(F.data.startswith("buy:"))
 async def buy(cb: CallbackQuery, bot: Bot) -> None:
     kind = cb.data.split(":")[1]
     catalog = {
@@ -1046,6 +1042,10 @@ async def buy(cb: CallbackQuery, bot: Bot) -> None:
         "super": ("1 Superlike", "Bir superlike krediti", PRICE_SUPER, f"super:{cb.from_user.id}"),
         "premium": ("Premium 7 gün", "Limitsiz bəyənmə və sarı tik", PRICE_PREMIUM, f"premium:{cb.from_user.id}"),
     }
+    if kind not in catalog:
+        await cb.answer("Paket tapılmadı.", show_alert=True)
+        return
+    title, desc, amount, payload = catalog[kind]
     if kind == "premium":
         row = await db.get(cb.from_user.id)
         if not row or row["status"] != "approved":
@@ -1164,11 +1164,6 @@ async def adm_act(cb: CallbackQuery, bot: Bot, state: FSMContext) -> None:
         await cb.answer("Gözləmə rejimi dəyişdi.", show_alert=True)
         return
     if action == "bulk":
-        total, _, _, _ = await db.counts()
-        min_users = int(await db.setting("min_users", "100"))
-        if total < min_users:
-            await cb.answer(f"Hələ {total}/{min_users}.", show_alert=True)
-            return
         rows = await db.pending(500)
         for row in rows:
             await db.set_status(row["user_id"], "approved")
@@ -1184,12 +1179,6 @@ async def adm_act(cb: CallbackQuery, bot: Bot, state: FSMContext) -> None:
         return
     uid = int(parts[2])
     if action == "ok":
-        wait = await db.setting("wait_mode", "1")
-        total, _, _, _ = await db.counts()
-        min_users = int(await db.setting("min_users", "100"))
-        if wait == "1" and total < min_users:
-            await cb.answer(f"Gözləmə rejimi açıqdır: {total}/{min_users}. Əvvəl Admin-dən söndür.", show_alert=True)
-            return
         await db.set_status(uid, "approved")
         gift = ""
         row = await db.get(uid)
@@ -1508,6 +1497,7 @@ async def main() -> None:
         raise SystemExit("BOT_TOKEN yoxdur.")
     logging.basicConfig(level=logging.INFO)
     await db.init()
+    await db.set_setting("wait_mode", "0")
     await db.set_status(OWNER_ID, "approved")
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
