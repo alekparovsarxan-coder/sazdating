@@ -1096,7 +1096,7 @@ async def admin(message: Message) -> None:
         [InlineKeyboardButton(text="Yalnız oğlan", callback_data="adm:cast:oglan")],
         [InlineKeyboardButton(text="Yalnız qız", callback_data="adm:cast:qiz")],
         [InlineKeyboardButton(text="Hamısını təsdiqlə", callback_data="adm:bulk")],
-        [InlineKeyboardButton(text="Stat", callback_data="adm:stat")],
+        [InlineKeyboardButton(text="Botu yoxla", callback_data="adm:check")],
         [InlineKeyboardButton(text="Eyni şəkillər", callback_data="adm:dups")],
         [InlineKeyboardButton(text="Yalnız bu gün", callback_data="adm:cast:today")],
         [InlineKeyboardButton(text=f"Gözləmə rejimi: {wait}", callback_data="adm:wait")],
@@ -1159,7 +1159,20 @@ async def adm_act(cb: CallbackQuery, bot: Bot, state: FSMContext) -> None:
         await cb.message.answer(f"Mesaj yaz. Hədəf: {target}. Ləğv: /cancel")
         await cb.answer()
         return
-    if action == "stat":
+    if action == "check":
+        total, pending, approved, banned = await db.counts()
+        boys, girls = await db.gender_counts()
+        ok = os.path.exists(DB_PATH)
+        await cb.message.answer(
+            "Yoxlama\n"
+            f"Baza faylı: {'var' if ok else 'yox'} · {DB_PATH}\n"
+            f"Adam {total} · gözləyən {pending} · açıq {approved} · ban {banned}\n"
+            f"Oğlan {boys} · qız {girls}\n"
+            "Qeydiyyat, lent, bəyənmə, keç, Stars və kart düymələri kodda bağlıdır.\n"
+            "Canlı yoxlama: bir nəfər /start, bir nəfər lent, bir nəfər ödəniş menyusu."
+        )
+        await cb.answer("Yoxlama hazırdır")
+        return
         boys, girls = await db.gender_counts()
         pays = await db.day_stats()
         await cb.message.answer(f"Oğlan {boys} · qız {girls}\nBu gün: yeni {pays[0]}, təsdiq {pays[1]}, şikayət {pays[2]}, Stars {pays[3]} ədəd, {pays[4]} star")
