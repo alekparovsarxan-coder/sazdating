@@ -1310,13 +1310,24 @@ async def prem_cmd(message: Message, bot: Bot) -> None:
     if len(parts) < 3:
         await message.answer("/prem 123 7 və ya /prem 123 0")
         return
+    row = await db.get(int(parts[1]))
+    if not row:
+        await message.answer("Bu ID bazada yoxdur. /user və ya /nomre ilə tap.")
+        return
     days = int(parts[2])
     if days <= 0:
         await db.set_field(int(parts[1]), "is_premium", 0)
         await message.answer("Premium bağlandı.")
         return
     until = await db.grant_premium(int(parts[1]), days)
-    await message.answer(f"Premium {until}-dək.")
+    if not until:
+        await message.answer("Yazılmadı.")
+        return
+    try:
+        await bot.send_message(int(parts[1]), f"Premium açıldı, {until}-dək. Adının yanında ⭐ görünəcək.")
+    except Exception:
+        pass
+    await message.answer(f"{row['name']} premium oldu, {until}-dək. ⭐")
 
 
 @router.message(Command("likever"))
@@ -1423,11 +1434,14 @@ async def grant_cmd(message: Message, bot: Bot) -> None:
     if len(parts) < 2 or not parts[1].isdigit():
         return
     until = await db.grant_premium(int(parts[1]), 7)
+    if not until:
+        await message.answer("Bu ID bazada yoxdur.")
+        return
     try:
-        await bot.send_message(int(parts[1]), f"Admin premium verdi, {until}-dək.")
+        await bot.send_message(int(parts[1]), f"Premium açıldı, {until}-dək. Adının yanında ⭐ görünəcək.")
     except Exception:
         pass
-    await message.answer(until)
+    await message.answer(f"Premium verildi, {until}-dək. ⭐")
 
 
 @router.callback_query(F.data.startswith("why:"))

@@ -191,9 +191,9 @@ class DB:
 
     def tick(self, row) -> str:
         if self.is_premium(row):
-            return " 🟡"
+            return " ⭐"
         if row["status"] == "approved":
-            return " 🔵"
+            return " ✅"
         return ""
 
     async def grant_premium(self, user_id: int, days: int) -> str:
@@ -203,11 +203,13 @@ class DB:
             base = datetime.fromisoformat(row["premium_until"])
         until = base + timedelta(days=days)
         async with aiosqlite.connect(self.path) as db:
-            await db.execute(
+            cur = await db.execute(
                 "UPDATE users SET is_premium=1, premium_until=? WHERE user_id=?",
                 (until.isoformat(), user_id),
             )
             await db.commit()
+            if cur.rowcount < 1:
+                return ""
         return until.astimezone(BAKU).strftime("%d.%m.%Y %H:%M")
 
     async def add_extra_likes(self, user_id: int, n: int) -> None:
