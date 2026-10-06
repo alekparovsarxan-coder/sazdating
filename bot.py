@@ -1590,8 +1590,15 @@ async def main() -> None:
     if not BOT_TOKEN or ":" not in BOT_TOKEN:
         raise SystemExit("BOT_TOKEN yoxdur.")
     logging.basicConfig(level=logging.INFO)
-    await db.init()
-    await db.set_setting("wait_mode", "0")
+    try:
+        await db.init()
+        await db.set_setting("wait_mode", "0")
+    except Exception:
+        logging.exception("db init failed")
+        if DB_PATH.startswith("/data"):
+            db.path = "sazdating.db"
+            await db.init()
+            await db.set_setting("wait_mode", "0")
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
     dp.include_router(router)
