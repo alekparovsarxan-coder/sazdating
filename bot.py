@@ -964,9 +964,9 @@ async def coin_buy(cb: CallbackQuery, bot: Bot) -> None:
             f"ID: {cb.from_user.id}\nNə qədər: "
         )
         await cb.message.answer(
-            "Balans kartla artırılır. Bu hazır mesajı mənə göndər, kartı yazacam.\n\n" + text,
+            "Balans kartla artırılır. Bu mesajı adminə göndər.\n\n" + text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Adminə yaz", url=f"tg://user?id={OWNER_ID}")
+                InlineKeyboardButton(text="Adminə birbaşa yaz", url=f"tg://user?id={OWNER_ID}")
             ]]),
         )
         await notify_admins(bot, "Balans sorğusu\n" + text)
@@ -1095,12 +1095,17 @@ async def admin(message: Message) -> None:
         [InlineKeyboardButton(text="Yalnız Bakı", callback_data="adm:cast:baki")],
         [InlineKeyboardButton(text="Yalnız oğlan", callback_data="adm:cast:oglan")],
         [InlineKeyboardButton(text="Yalnız qız", callback_data="adm:cast:qiz")],
-        [InlineKeyboardButton(text="100-ü təsdiqlə", callback_data="adm:bulk")],
+        [InlineKeyboardButton(text="Hamısını təsdiqlə", callback_data="adm:bulk")],
+        [InlineKeyboardButton(text="Stat", callback_data="adm:stat")],
+        [InlineKeyboardButton(text="Eyni şəkillər", callback_data="adm:dups")],
+        [InlineKeyboardButton(text="Yalnız bu gün", callback_data="adm:cast:today")],
         [InlineKeyboardButton(text=f"Gözləmə rejimi: {wait}", callback_data="adm:wait")],
     ])
     await message.answer(
-        f"İstifadəçi: {total}\nGözləyən: {pending}\nTəsdiqli: {approved}\nBan: {banned}\n\n"
-        "Axtarış: /user 123456\nBan: /ban 123\nAç: /unban 123\nPremium: /grant 123\nQeyd: /qeyd 123 mətn\nHəftənin anketi: /hefte 123",
+        f"Baza: {DB_PATH}\nİstifadəçi: {total}\nGözləyən: {pending}\nTəsdiqli: {approved}\nBan: {banned}\n\n"
+        "Axtarış: /ad Nigar · /nomre 99450 · /seher Bakı\n"
+        "Premium: /prem 123 7 və ya /prem 123 0\nBəyənmə: /likever 123 10\n"
+        "Dəvət: /devet 123",
         reply_markup=kb,
     )
 
@@ -1154,7 +1159,17 @@ async def adm_act(cb: CallbackQuery, bot: Bot, state: FSMContext) -> None:
         await cb.message.answer(f"Mesaj yaz. Hədəf: {target}. Ləğv: /cancel")
         await cb.answer()
         return
-    if action == "wait":
+    if action == "stat":
+        boys, girls = await db.gender_counts()
+        pays = await db.day_stats()
+        await cb.message.answer(f"Oğlan {boys} · qız {girls}\nBu gün: yeni {pays[0]}, təsdiq {pays[1]}, şikayət {pays[2]}, Stars {pays[3]} ədəd, {pays[4]} star")
+        await cb.answer()
+        return
+    if action == "dups":
+        rows = await db.dup_photos()
+        await cb.message.answer("Eyni şəkil: " + (", ".join(f"{r['photo_uid'][:8]} ×{r['n']}" for r in rows) or "yoxdur"))
+        await cb.answer()
+        return
         cur = await db.setting("wait_mode", "1")
         await db.set_setting("wait_mode", "0" if cur == "1" else "1")
         await cb.answer("Gözləmə rejimi dəyişdi.", show_alert=True)
@@ -1247,7 +1262,71 @@ async def cast_send(message: Message, state: FSMContext, bot: Bot) -> None:
     await message.answer(f"Göndərildi: {ok}/{len(ids)}")
 
 
-@router.message(Command("user"))
+@router.message(Command("ad"))
+async def search_ad(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    q = (message.text or "").split(maxsplit=1)
+    rows = await db.search_name(q[1] if len(q) > 1 else "")
+    await message.answer("\n".join(f"{r['name']} · {r['city']} · {r['user_id']}" for r in rows) or "Yoxdur")
+
+
+@router.message(Command("nomre"))
+async def search_phone(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    q = (message.text or "").split(maxsplit=1)
+    row = await db.find_phone(q[1] if len(q) > 1 else "")
+    await message.answer(f"{row['name']} · {row['phone']} · {row['user_id']}" if row else "Yoxdur")
+
+
+@router.message(Command("seher"))
+async def search_city(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    q = (message.text or "").split(maxsplit=1)
+    rows = await db.search_city(q[1] if len(q) > 1 else "")
+    await message.answer("\n".join(f"{r['name']} · {r['city']} · {r['user_id']}" for r in rows) or "Yoxdur")
+
+
+@router.message(Command("prem"))
+async def prem_cmd(message: Message, bot: Bot) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 3:
+        await message.answer("/prem 123 7 və ya /prem 123 0")
+        return
+    days = int(parts[2])
+    if days <= 0:
+        await db.set_field(int(parts[1]), "is_premium", 0)
+        await message.answer("Premium bağlandı.")
+        return
+    until = await db.grant_premium(int(parts[1]), days)
+    await message.answer(f"Premium {until}-dək.")
+
+
+@router.message(Command("likever"))
+async def likever(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 3:
+        await message.answer("/likever 123 10")
+        return
+    await db.add_extra_likes(int(parts[1]), int(parts[2]))
+    await message.answer("Bəyənmə əlavə olundu.")
+
+
+@router.message(Command("devet"))
+async def devet(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("/devet 123")
+        return
+    await message.answer("Bu adamın dəvət etdikləri ayrıca cədvəldə saxlanır. Link: start=ref" + parts[1])
 async def user_info(message: Message) -> None:
     if not is_admin(message.from_user.id):
         return

@@ -176,7 +176,7 @@ class DB:
             "name", "age", "city", "bio", "looking", "username", "photo_id",
             "lat", "lon", "hidden", "status", "approved_at", "last_nudge",
             "like_warn", "prem_warn", "lang", "city_only", "hidden_until", "admin_note", "phone",
-            "boost_day", "last_seen", "photo_uid", "views_today", "views_day", "bday", "campaign",
+            "boost_day", "last_seen", "photo_uid", "views_today", "views_day", "bday", "campaign", "is_premium",
         }
         if field not in allowed:
             raise ValueError(field)
@@ -537,6 +537,36 @@ class DB:
             approved = (await (await db.execute("SELECT COUNT(*) FROM users WHERE status='approved'")).fetchone())[0]
             banned = (await (await db.execute("SELECT COUNT(*) FROM users WHERE status='banned'")).fetchone())[0]
             return total, pending, approved, banned
+
+    async def gender_counts(self):
+        async with aiosqlite.connect(self.path) as db:
+            boys = (await (await db.execute("SELECT COUNT(*) FROM users WHERE gender='oglan'")).fetchone())[0]
+            girls = (await (await db.execute("SELECT COUNT(*) FROM users WHERE gender='qiz'")).fetchone())[0]
+            return boys, girls
+
+    async def search_name(self, q: str):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM users WHERE name LIKE ? LIMIT 15", (f"%{q}%",))
+            return await cur.fetchall()
+
+    async def search_city(self, q: str):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM users WHERE city LIKE ? LIMIT 15", (f"%{q}%",))
+            return await cur.fetchall()
+
+    async def dup_photos(self):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT photo_uid, COUNT(*) n FROM users
+                WHERE photo_uid IS NOT NULL AND photo_uid != ''
+                GROUP BY photo_uid HAVING n>1 LIMIT 10
+                """
+            )
+            return await cur.fetchall()
 
     async def approved_ids(self):
         async with aiosqlite.connect(self.path) as db:
